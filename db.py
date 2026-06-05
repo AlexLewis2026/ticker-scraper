@@ -50,6 +50,42 @@ def init_db():
         """)
 
 
+def _row_key(row: dict) -> tuple:
+    """Deduplication key for a single raw OCR row."""
+    return (
+        row.get("timestamp", ""),
+        row.get("cc", ""),
+        row.get("qty"),
+        row.get("strip", ""),
+        row.get("price"),
+    )
+
+
+def known_row_keys() -> set[tuple]:
+    """Return the dedup keys of every raw row ever stored."""
+    with _connect() as con:
+        rows = con.execute("SELECT row_json FROM raw_rows").fetchall()
+    return {_row_key(json.loads(r["row_json"])) for r in rows}
+
+
+def filter_new_rows(raw_rows: list[dict]) -> tuple[list[dict], int]:
+    """
+    Remove rows already seen in any previous import.
+    Returns (new_rows, n_skipped).
+    """
+    known = known_row_keys()
+    new, skipped = [], 0
+    seen_this_batch: set[tuple] = set()
+    for row in raw_rows:
+        k = _row_key(row)
+        if k in known or k in seen_this_batch:
+            skipped += 1
+        else:
+            new.append(row)
+            seen_this_batch.add(k)
+    return new, skipped
+
+
 def save_import(original_name: str, tmp_image_path: str,
                 raw_rows: list[dict], trades: list[dict]) -> int:
     """

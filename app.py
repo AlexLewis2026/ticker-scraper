@@ -557,7 +557,8 @@ async function parseImage() {
 
     renderTrades(data.trades);
     document.getElementById('save-btn').disabled = false;
-    setStatus(`✓ ${data.raw_count} rows → ${data.trades.length} trade(s) extracted.`, 'ok');
+    const dupMsg = data.dup_count > 0 ? `, ${data.dup_count} duplicate row(s) ignored` : '';
+    setStatus(`✓ ${data.raw_count} rows scanned → ${data.new_count} new → ${data.trades.length} trade(s) extracted${dupMsg}.`, 'ok');
     switchTab('preview');
     // Refresh history badge without switching tab
     _refreshHistoryBackground();
@@ -938,10 +939,12 @@ def parse():
         tmp_path = tmp.name
 
     try:
-        raw_rows  = parse_image_local(tmp_path)
-        trades    = group_rows_into_trades(raw_rows)
-        import_id = database.save_import(image.filename, tmp_path, raw_rows, trades)
-        return jsonify(raw_count=len(raw_rows), trades=trades, import_id=import_id)
+        all_rows             = parse_image_local(tmp_path)
+        raw_rows, dup_count  = database.filter_new_rows(all_rows)
+        trades               = group_rows_into_trades(raw_rows)
+        import_id            = database.save_import(image.filename, tmp_path, raw_rows, trades)
+        return jsonify(raw_count=len(all_rows), new_count=len(raw_rows),
+                       dup_count=dup_count, trades=trades, import_id=import_id)
     except Exception as e:
         return jsonify(error=str(e)), 500
     finally:
