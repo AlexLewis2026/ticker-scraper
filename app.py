@@ -16,7 +16,7 @@ from trade_accumulator_v4 import (
     build_fresh_workbook,
     group_rows_into_trades,
 )
-from ocr_parser import parse_image_local
+from ocr_parser import parse_image_local, ocr_raw_text
 from openpyxl import load_workbook
 import db as database
 
@@ -1000,6 +1000,30 @@ def save():
         return jsonify(error="Excel file is open in another program. Close it and try again."), 409
     except Exception as e:
         return jsonify(error=f"Save failed: {e}"), 500
+
+
+@app.route("/parse-debug", methods=["POST"])
+def parse_debug():
+    """Return raw Tesseract OCR text for a given image — useful for diagnosing parse failures."""
+    image = request.files.get("image")
+    if not image or not image.filename:
+        return jsonify(error="No image uploaded."), 400
+    if not _allowed_image(image.filename):
+        return jsonify(error="Unsupported file type."), 400
+
+    suffix = Path(image.filename).suffix.lower() or ".png"
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            image.save(tmp.name)
+            tmp_path = tmp.name
+        raw = ocr_raw_text(tmp_path)
+        return jsonify(raw_text=raw)
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+    finally:
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
 
 
 @app.route("/history")

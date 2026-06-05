@@ -17,11 +17,12 @@ HUB_START_WORDS = {"Naphtha", "Sing", "Argus"}
 # Valid CC codes: 2-5 uppercase letters
 CC_PATTERN = re.compile(r"^[A-Z]{2,5}$")
 
-# Timestamp: HH:MM:SS BST
-TS_RE = re.compile(r"^(\d{2}:\d{2}:\d{2})\s+BST\s+(.*)", re.DOTALL)
+# Timestamp: HH:MM:SS + any timezone abbreviation (BST, GMT, UTC, CET, EST …)
+TS_RE = re.compile(r"^(\d{2}:\d{2}:\d{2})\s+([A-Z]{2,5})\s+(.*)", re.DOTALL)
 
-# Price at end of line before BLK marker
-PRICE_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s+\S*\s*BLK\s*$", re.IGNORECASE)
+# Price at end of line, followed by an optional bullet/junk char then any
+# word (trade-type code: BLK, AGR, VOL, …) — case-insensitive
+PRICE_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s+\S*\s*[A-Z]{2,5}\s*$", re.IGNORECASE)
 
 # Qty stuck to first strip word, e.g. "4Bal" "5Aug26"
 QTY_STUCK_RE = re.compile(r"^(\d+)([A-Za-z].*)$")
@@ -78,8 +79,8 @@ def _parse_line(line: str) -> dict | None:
     m = TS_RE.match(line)
     if not m:
         return None
-    timestamp = m.group(1) + " BST"
-    rest = m.group(2).strip()
+    timestamp = m.group(1) + " " + m.group(2)   # e.g. "13:04:42 BST" or "13:04:42 GMT"
+    rest = m.group(3).strip()
 
     pm = PRICE_RE.search(rest)
     if not pm:
@@ -165,11 +166,21 @@ def parse_image_local(image_path: str) -> list[dict]:
     raw_text = _ocr_image(image_path)
     rows = [r for line in raw_text.splitlines() if (r := _parse_line(line))]
     if not rows:
+        preview = "\n".join(raw_text.splitlines()[:8]) or "(empty)"
         raise ValueError(
-            "No trade rows could be parsed from the image. "
-            "Check that the screenshot shows a blotter with BST timestamps."
+            f"No trade rows could be parsed from the image.\n\n"
+            f"Raw OCR output (first 8 lines):\n{preview}\n\n"
+            f"Common causes:\n"
+            f"  • Timezone shown is not a recognised abbreviation\n"
+            f"  • The blotter hub names are not yet in HUB_START_WORDS\n"
+            f"  • The image is not a blotter screenshot"
         )
     return rows
+
+
+def ocr_raw_text(image_path: str) -> str:
+    """Return the raw Tesseract text for diagnostic purposes."""
+    return _ocr_image(image_path)
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────

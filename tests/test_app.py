@@ -119,12 +119,12 @@ class TestParse:
 
     def test_ocr_failure_returns_400(self, client):
         c, *_ = client
-        with patch("app.parse_image_local", side_effect=ValueError("No rows parsed")):
+        with patch("app.parse_image_local", side_effect=ValueError("No trade rows could be parsed")):
             r = c.post("/parse", data={
                 "image": (_png_bytes(), "blotter.png")
             }, content_type="multipart/form-data")
         assert r.status_code == 400
-        assert "No rows" in r.get_json()["error"]
+        assert "No trade rows" in r.get_json()["error"]
 
     def test_duplicate_rows_reported(self, client):
         c, *_ = client

@@ -92,6 +92,19 @@ class TestParseLine:
         """Row whose hub doesn't start with a known word is skipped."""
         assert _parse_line("13:00:00 BST NEC 10 Jul26 UnknownHub Cg 700.00 BLK") is None
 
+    def test_gmt_timezone_accepted(self):
+        """Winter timezone GMT must parse identically to BST."""
+        line = "13:02:53 GMT STB 50 Jul26 Sing Mogas 92 Unl (Platts)/Brent 1st Line 17.25 @ BLK"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["timestamp"] == "13:02:53 GMT"
+
+    def test_utc_timezone_accepted(self):
+        line = "13:02:53 UTC NEC 10 Jul26 Naphtha CIF NWE Cg 700.00 © BLK"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["timestamp"] == "13:02:53 UTC"
+
     def test_multi_word_strip(self):
         line = "13:00:28 BST NEH 5 Bal Month Naphtha CIF NWE Cg 712.50 © BLK"
         row = _parse_line(line)
