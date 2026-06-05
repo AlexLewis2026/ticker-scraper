@@ -89,7 +89,6 @@ def _parse_line(line: str) -> dict | None:
     """
     Parse one OCR text line into a trade row dict.
     Returns None if the line doesn't look like a blotter data row.
-    Hub is intentionally ignored — CC identifies the product.
     """
     line = line.strip()
     if not line:
@@ -144,16 +143,21 @@ def _parse_line(line: str) -> dict | None:
     except ValueError:
         return None
 
-    # 5. Strip: consume tokens that match strip patterns; ignore the rest (hub)
-    for tok in tokens:
+    # 5. Strip: consume tokens that match strip patterns.
+    #    Everything after the strip is the hub.
+    hub_start = len(tokens)
+    for i, tok in enumerate(tokens):
         if _is_strip_token(tok):
             strip_tokens.append(tok)
         else:
-            break   # first non-strip token starts the hub — stop here
+            hub_start = i
+            break
 
     strip = " ".join(strip_tokens)
     if not strip:
         return None
+
+    hub = " ".join(tokens[hub_start:]).strip()
 
     # 6. Diff row: strip contains "/" and price is small (spread differential)
     is_diff = "/" in strip and abs(price) < 100
@@ -163,7 +167,7 @@ def _parse_line(line: str) -> dict | None:
         "cc":          cc,
         "qty":         qty,
         "strip":       strip,
-        "hub":         "",          # hub ignored; CC identifies the product
+        "hub":         hub,
         "price":       price,
         "is_diff_row": is_diff,
     }

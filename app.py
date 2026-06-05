@@ -891,24 +891,18 @@ def _compute_tally():
             l = legs[0]
             buckets[(cc, l["strip"], "OUTRIGHT")].append(
                 {"ts": ts, "qty": qty, "price": float(l["price"])})
-        elif tt == "SPREAD":
-            for l in legs:
-                buckets[(cc, l["strip"], "SPREAD_LEG")].append(
-                    {"ts": ts, "qty": qty, "price": float(l["price"])})
-            if sp is not None:
-                diff_label = " / ".join(l["strip"] for l in legs)
-                buckets[(cc, diff_label, "SPREAD_DIFF")].append(
-                    {"ts": ts, "qty": qty, "price": float(sp)})
+        elif tt == "SPREAD" and sp is not None:
+            # One entry per spread trade using the differential price.
+            # Individual legs are not shown separately to avoid duplication.
+            diff_label = " / ".join(l["strip"] for l in legs)
+            buckets[(cc, diff_label, "SPREAD")].append(
+                {"ts": ts, "qty": qty, "price": float(sp)})
 
     for k in buckets:
         buckets[k].sort(key=lambda x: x["ts"])
 
-    KIND_ORDER = {"OUTRIGHT": 0, "SPREAD_LEG": 1, "SPREAD_DIFF": 2}
-    KIND_LABEL = {
-        "OUTRIGHT":    "Outright",
-        "SPREAD_LEG":  "Spread — leg price",
-        "SPREAD_DIFF": "Spread — differential",
-    }
+    KIND_ORDER = {"OUTRIGHT": 0, "SPREAD": 1}
+    KIND_LABEL = {"OUTRIGHT": "Outright", "SPREAD": "Spread"}
     sorted_keys = sorted(buckets, key=lambda k: (k[0], KIND_ORDER.get(k[2], 9), k[1]))
 
     cc_groups = {}

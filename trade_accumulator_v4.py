@@ -418,11 +418,10 @@ def _rebuild_tally(wb):
     if not all_trades:
         return
 
-    # ── Build records for three bucket types ──────────────────────────────
+    # ── Build records for two bucket types ────────────────────────────────
     #
-    #  (a) OUTRIGHT       key = (cc, strip,        "OUTRIGHT")
-    #  (b) SPREAD_LEG     key = (cc, strip,         "SPREAD_LEG")
-    #  (c) SPREAD_DIFF    key = (cc, "L1 / L2 ...", "SPREAD_DIFF")
+    #  (a) OUTRIGHT  key = (cc, strip,        "OUTRIGHT")
+    #  (b) SPREAD    key = (cc, "L1 / L2 ...", "SPREAD")   — differential only
 
     from collections import defaultdict
     buckets: dict[tuple, list] = defaultdict(list)
@@ -435,23 +434,19 @@ def _rebuild_tally(wb):
             buckets[(cc, l["strip"], "OUTRIGHT")].append(
                 {"ts": t["ts"], "qty": qty, "price": l["price"]})
 
-        elif tt == "SPREAD":
-            # Leg prices
-            for l in legs:
-                buckets[(cc, l["strip"], "SPREAD_LEG")].append(
-                    {"ts": t["ts"], "qty": qty, "price": l["price"]})
-            # Differential
-            if t["sp"] is not None:
-                diff_label = " / ".join(l["strip"] for l in legs)
-                buckets[(cc, diff_label, "SPREAD_DIFF")].append(
-                    {"ts": t["ts"], "qty": qty, "price": t["sp"]})
+        elif tt == "SPREAD" and t["sp"] is not None:
+            # One row per spread trade using the differential price only.
+            # Individual legs are not shown separately to avoid duplication.
+            diff_label = " / ".join(l["strip"] for l in legs)
+            buckets[(cc, diff_label, "SPREAD")].append(
+                {"ts": t["ts"], "qty": qty, "price": t["sp"]})
 
     # Sort each bucket by timestamp
     for k in buckets:
         buckets[k].sort(key=lambda x: x["ts"])
 
     # ── Sort keys: CC → kind order → strip label ──────────────────────────
-    KIND_ORDER = {"OUTRIGHT": 0, "SPREAD_LEG": 1, "SPREAD_DIFF": 2}
+    KIND_ORDER = {"OUTRIGHT": 0, "SPREAD": 1}
     sorted_keys = sorted(
         buckets.keys(),
         key=lambda k: (k[0], KIND_ORDER.get(k[2], 9), k[1])
@@ -472,7 +467,7 @@ def _rebuild_tally(wb):
     for key in sorted_keys:
         cc_key, strip_label, kind = key
         recs      = buckets[key]
-        trade_fill = F_SPREAD if kind in ("SPREAD_LEG", "SPREAD_DIFF") else F_OUT
+        trade_fill = F_SPREAD if kind == "SPREAD" else F_OUT
 
         # CC banner (new CC)
         if cc_key != prev_cc:
@@ -490,11 +485,7 @@ def _rebuild_tally(wb):
             prev_cc = cc_key
 
         # Block sub-header
-        kind_label = {
-            "OUTRIGHT":    "Outright",
-            "SPREAD_LEG":  "Spread — leg price",
-            "SPREAD_DIFF": "Spread — differential",
-        }[kind]
+        kind_label = {"OUTRIGHT": "Outright", "SPREAD": "Spread"}[kind]
         block_title = f"{strip_label}  [{kind_label}]"
 
         for ci in range(1, 7):

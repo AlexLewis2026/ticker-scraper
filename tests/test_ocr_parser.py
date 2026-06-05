@@ -54,7 +54,7 @@ class TestParseLine:
         assert row["strip"]     == "Jul26"
         assert row["price"]     == 17.25
         assert row["is_diff_row"] is False
-        assert row["hub"]       == ""
+        assert "Sing" in row["hub"]
 
     def test_outright_without_cc(self):
         line = "13:03:21 BST 25 Jul26 Sing Mogas 92 Unl (Platts)/Brent 1st Line 17.25 @ BLK"
@@ -89,30 +89,30 @@ class TestParseLine:
         assert row is not None
         assert row["price"] == -12.25
 
-    def test_far_east_hub_ignored(self):
+    def test_far_east_hub_parsed(self):
         line = "10:13:01 BST AFE 2 Aug26 Far East 667.00 © BLK"
         row = _parse_line(line)
         assert row is not None
         assert row["cc"]    == "AFE"
         assert row["qty"]   == 2
         assert row["strip"] == "Aug26"
-        assert row["hub"]   == ""
+        assert row["hub"]   == "Far East"
 
-    def test_saudi_cp_hub_ignored(self):
+    def test_saudi_cp_hub_parsed(self):
         line = "10:07:33 BST SCP 1 Oct26 Saudi CP 581.00 © BLK"
         row = _parse_line(line)
         assert row is not None
         assert row["cc"]    == "SCP"
         assert row["strip"] == "Oct26"
-        assert row["hub"]   == ""
+        assert row["hub"]   == "Saudi CP"
 
-    def test_mt_betr_hub_ignored(self):
+    def test_mt_betr_hub_parsed(self):
         line = "09:56:15 BST PRL 12 Jul26 MT B-ETR 0.800000 © BLK"
         row = _parse_line(line)
         assert row is not None
         assert row["cc"]    == "PRL"
         assert row["strip"] == "Jul26"
-        assert row["hub"]   == ""
+        assert row["hub"]   == "MT B-ETR"
 
     def test_far_east_spread_diff(self):
         line = "10:13:01 BST AFE 2 Jul26/Aug26 Far East 45.00 © BLK"
@@ -174,17 +174,17 @@ class TestParseLine:
         assert row["strip"] == "Bal Month"
         assert row["qty"]   == 5
 
-    def test_hub_is_always_empty(self):
-        """Hub field should always be empty string regardless of blotter hub."""
-        for line in [
-            "10:13:01 BST AFE 2 Aug26 Far East 667.00 © BLK",
-            "10:07:33 BST SCP 1 Oct26 Saudi CP 581.00 © BLK",
-            "13:02:53 BST STB 50 Jul26 Sing Mogas 92 Unl 17.25 @ BLK",
-            "12:53:46 BST AOM 10 Jul26 Argus Eurobob Oxy 957.95 © BLK",
-        ]:
+    def test_hub_captured(self):
+        """Hub field should be captured from the first non-strip token onwards."""
+        cases = [
+            ("10:13:01 BST AFE 2 Aug26 Far East 667.00 © BLK",        "Far East"),
+            ("10:07:33 BST SCP 1 Oct26 Saudi CP 581.00 © BLK",        "Saudi CP"),
+            ("12:53:46 BST AOM 10 Jul26 Argus Eurobob Oxy 957.95 © BLK", "Argus Eurobob Oxy"),
+        ]
+        for line, expected_hub in cases:
             row = _parse_line(line)
-            if row:
-                assert row["hub"] == "", f"Expected empty hub, got '{row['hub']}' for: {line}"
+            assert row is not None, f"Failed to parse: {line}"
+            assert row["hub"] == expected_hub, f"Expected hub '{expected_hub}', got '{row['hub']}'"
 
 
 # ── parse_image_local ─────────────────────────────────────────────────────────
