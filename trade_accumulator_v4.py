@@ -398,7 +398,11 @@ def _rebuild_tally(wb):
     for row in ws.iter_rows(min_row=2, values_only=True):
         if not row[0]:
             continue
-        ts, tt, notes, cc, qty = row[0], row[1], row[2], row[3], row[4]
+        ts    = str(row[0] or "")
+        tt    = str(row[1] or "")
+        notes = str(row[2] or "")
+        cc    = str(row[3] or "")
+        qty   = row[4] or 0
         hub, sp = row[5], row[6]
         legs = []
         for i in range(3):
