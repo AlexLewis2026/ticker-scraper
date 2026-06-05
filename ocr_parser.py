@@ -2,41 +2,48 @@
 Local OCR parser — replaces Claude Vision with Tesseract.
 Reads a blotter screenshot and returns the same list-of-dicts format
 that parse_image_with_claude() returned.
+
+Product identity comes from CC, not hub. Hub is not parsed.
 """
 
 import re
 from pathlib import Path
 
-# ── known constants ────────────────────────────────────────────────────────────
+# ── constants ──────────────────────────────────────────────────────────────────
 
 TESSERACT_CMD = r"C:\Users\AlexLewis\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
-
-# Hub names always start with one of these words (after stripping OCR junk).
-# Add new hub prefixes here whenever a new blotter hub is encountered.
-HUB_START_WORDS = {
-    "Naphtha",  # Naphtha CIF NWE Cg, Naphtha C&F Japan Cg
-    "Sing",     # Sing Mogas 92 Unl (Platts)/Brent 1st Line
-    "Argus",    # Argus Eurobob Oxy FOB Rdam Bg
-    "Far",      # Far East
-    "Saudi",    # Saudi CP
-    "MT",       # MT B-ETR, MT B-ENT
-    "Conway",   # Conway (propane hub)
-    "CIF",      # CIF ARA
-    "FOB",      # FOB Rotterdam etc.
-}
 
 # Valid CC codes: 2-5 uppercase letters
 CC_PATTERN = re.compile(r"^[A-Z]{2,5}$")
 
-# Timestamp: HH:MM:SS + any timezone abbreviation (BST, GMT, UTC, CET, EST …)
+# Timestamp: HH:MM:SS + any timezone abbreviation (BST, GMT, UTC, CET …)
 TS_RE = re.compile(r"^(\d{2}:\d{2}:\d{2})\s+([A-Z]{2,5})\s+(.*)", re.DOTALL)
 
-# Price at end of line, followed by an optional bullet/junk char then any
-# word (trade-type code: BLK, AGR, VOL, …) — case-insensitive
+# Price at end of line: last number before optional junk + trade-type code
 PRICE_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s+\S*\s*[A-Z]{2,5}\s*$", re.IGNORECASE)
 
-# Qty stuck to first strip word, e.g. "4Bal" "5Aug26"
+# Qty stuck to first strip word, e.g. "4Bal" "5Aug26" "1Q3"
 QTY_STUCK_RE = re.compile(r"^(\d+)([A-Za-z].*)$")
+
+# Strip token patterns (tokens that belong to the strip field)
+_STRIP_TOKEN_RE = re.compile(
+    r"^("
+    r"\d{2}$"                    # bare 2-digit year: 26, 27
+    r"|[A-Za-z]+\d{2}"          # MonthYY: Jul26, Aug26, Dec27
+    r"|[A-Za-z]+\d{2}/[A-Za-z]*\d{2}"  # spread: Jul26/Aug26
+    r"|Bal$"                     # "Bal" (always followed by "Month")
+    r"|Month"                    # "Month" or "Month/MonthYY"
+    r"|Q[1-4]$"                  # quarter: Q1 Q2 Q3 Q4
+    r")$"
+)
+
+
+def _is_strip_token(tok: str) -> bool:
+    """Return True if this token is part of a strip/spread designation."""
+    # Also accept tokens that contain a slash and end with 2-digit year
+    if "/" in tok and re.search(r"\d{2}$", tok):
+        return True
+    return bool(_STRIP_TOKEN_RE.match(tok))
 
 
 # ── image → raw text ───────────────────────────────────────────────────────────
@@ -53,7 +60,7 @@ def _ocr_image(image_path: str) -> str:
 
     try:
         import pytesseract
-        from PIL import Image, UnidentifiedImageError
+        from PIL import Image
     except ImportError as e:
         raise ImportError(
             f"Missing dependency: {e}. Run: pip install pytesseract pillow"
@@ -82,17 +89,20 @@ def _parse_line(line: str) -> dict | None:
     """
     Parse one OCR text line into a trade row dict.
     Returns None if the line doesn't look like a blotter data row.
+    Hub is intentionally ignored — CC identifies the product.
     """
     line = line.strip()
     if not line:
         return None
 
+    # 1. Extract timestamp + timezone
     m = TS_RE.match(line)
     if not m:
         return None
-    timestamp = m.group(1) + " " + m.group(2)   # e.g. "13:04:42 BST" or "13:04:42 GMT"
+    timestamp = m.group(1) + " " + m.group(2)
     rest = m.group(3).strip()
 
+    # 2. Extract price + trade-type code from end
     pm = PRICE_RE.search(rest)
     if not pm:
         return None
@@ -106,7 +116,7 @@ def _parse_line(line: str) -> dict | None:
     if not tokens:
         return None
 
-    # Optional leading CC token
+    # 3. Optional CC: leading 2-5 uppercase token
     cc = ""
     if CC_PATTERN.match(tokens[0]):
         cc = tokens[0]
@@ -115,44 +125,37 @@ def _parse_line(line: str) -> dict | None:
     if not tokens:
         return None
 
-    # Find hub start — first token whose cleaned form is a known hub word
-    hub_start_idx = None
-    for i, tok in enumerate(tokens):
-        if tok.lstrip("=©®@•~-_") in HUB_START_WORDS:
-            hub_start_idx = i
-            break
-
-    if hub_start_idx is None:
-        return None
-
-    qty_strip_tokens = tokens[:hub_start_idx]
-    hub_tokens       = tokens[hub_start_idx:]
-    hub_tokens[0]    = hub_tokens[0].lstrip("=©®@•~-_")
-    hub              = " ".join(hub_tokens)
-
-    if not qty_strip_tokens:
-        return None
-
-    first = qty_strip_tokens[0]
-    sm    = QTY_STUCK_RE.match(first)
+    # 4. Qty: first token (may be fused to strip word, e.g. "4Bal")
+    first = tokens[0]
+    sm = QTY_STUCK_RE.match(first)
     if sm:
         qty_str      = sm.group(1)
-        strip_tokens = [sm.group(2)] + qty_strip_tokens[1:]
+        strip_tokens = [sm.group(2)]
+        tokens       = tokens[1:]
     else:
         if not first.isdigit():
             return None
         qty_str      = first
-        strip_tokens = qty_strip_tokens[1:]
+        strip_tokens = []
+        tokens       = tokens[1:]
 
     try:
         qty = int(qty_str)
     except ValueError:
         return None
 
+    # 5. Strip: consume tokens that match strip patterns; ignore the rest (hub)
+    for tok in tokens:
+        if _is_strip_token(tok):
+            strip_tokens.append(tok)
+        else:
+            break   # first non-strip token starts the hub — stop here
+
     strip = " ".join(strip_tokens)
     if not strip:
         return None
 
+    # 6. Diff row: strip contains "/" and price is small (spread differential)
     is_diff = "/" in strip and abs(price) < 100
 
     return {
@@ -160,7 +163,7 @@ def _parse_line(line: str) -> dict | None:
         "cc":          cc,
         "qty":         qty,
         "strip":       strip,
-        "hub":         hub,
+        "hub":         "",          # hub ignored; CC identifies the product
         "price":       price,
         "is_diff_row": is_diff,
     }
@@ -182,8 +185,7 @@ def parse_image_local(image_path: str) -> list[dict]:
             f"No trade rows could be parsed from the image.\n\n"
             f"Raw OCR output (first 8 lines):\n{preview}\n\n"
             f"Common causes:\n"
-            f"  • Timezone shown is not a recognised abbreviation\n"
-            f"  • The blotter hub names are not yet in HUB_START_WORDS\n"
+            f"  • The blotter uses a strip format not yet recognised\n"
             f"  • The image is not a blotter screenshot"
         )
     return rows
