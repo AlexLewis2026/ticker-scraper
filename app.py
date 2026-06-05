@@ -2,6 +2,7 @@
 Trade Accumulator — Flask web frontend
 """
 
+import base64
 import os
 import tempfile
 from collections import defaultdict
@@ -17,8 +18,10 @@ from trade_accumulator_v4 import (
 )
 from ocr_parser import parse_image_local
 from openpyxl import load_workbook
+import db as database
 
 app = Flask(__name__)
+database.init_db()
 
 EXCEL_PATH = Path(__file__).parent / "trade_tally_v4.xlsx"
 
@@ -55,7 +58,7 @@ HTML = r"""
   header h1 { font-size: 17px; font-weight: bold; color: #fff; }
   header span { font-size: 12px; color: #a8c4e0; }
 
-  .layout { display: flex; flex: 1; }
+  .layout { display: flex; flex: 1; overflow: hidden; }
 
   /* ── Left panel ── */
   .left {
@@ -67,6 +70,7 @@ HTML = r"""
     display: flex;
     flex-direction: column;
     gap: 14px;
+    overflow-y: auto;
   }
 
   label.field-label {
@@ -104,6 +108,7 @@ HTML = r"""
     max-height: 180px;
     object-fit: contain;
     background: #000;
+    cursor: pointer;
   }
 
   .btn {
@@ -146,6 +151,7 @@ HTML = r"""
     display: flex;
     border-bottom: 1px solid #30363d;
     background: #161b22;
+    flex-shrink: 0;
   }
   .tab {
     padding: 10px 20px;
@@ -155,6 +161,7 @@ HTML = r"""
     border-bottom: 2px solid transparent;
     transition: color .15s;
     user-select: none;
+    white-space: nowrap;
   }
   .tab:hover { color: #e6edf3; }
   .tab.active { color: #58a6ff; border-bottom-color: #1f6feb; }
@@ -183,12 +190,7 @@ HTML = r"""
     padding: 8px 12px;
     border-bottom: 1px solid #30363d;
   }
-  .badge {
-    font-size: 11px;
-    font-weight: bold;
-    border-radius: 4px;
-    padding: 2px 7px;
-  }
+  .badge { font-size: 11px; font-weight: bold; border-radius: 4px; padding: 2px 7px; }
   .badge-outright { background: #21262d; color: #e6edf3; }
   .badge-spread   { background: #3d2b00; color: #f0b429; }
   .badge-flag     { background: #490202; color: #f85149; }
@@ -204,8 +206,52 @@ HTML = r"""
   .trade-field dt { color: #8b949e; font-size: 11px; }
   .trade-field dd { color: #e6edf3; font-weight: bold; margin-top: 2px; }
 
-  /* ── Trade log table ── */
-  #log-table-wrap { overflow: auto; }
+  /* ── History tab ── */
+  .history-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+  }
+
+  .history-card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: border-color .15s, transform .1s;
+  }
+  .history-card:hover { border-color: #58a6ff; transform: translateY(-1px); }
+  .history-card.active-import { border-color: #2ea043; }
+
+  .history-card img {
+    width: 100%;
+    height: 140px;
+    object-fit: cover;
+    object-position: top;
+    background: #000;
+    display: block;
+  }
+  .history-card-body { padding: 10px 12px; }
+  .history-card-body .filename {
+    font-weight: bold;
+    color: #e6edf3;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .history-card-body .ts { color: #8b949e; font-size: 11px; margin-top: 3px; }
+  .history-card-body .pills { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .pill {
+    font-size: 11px;
+    border-radius: 10px;
+    padding: 2px 8px;
+    background: #21262d;
+    color: #8b949e;
+  }
+  .pill.saved { background: #1a3a1a; color: #3fb950; }
+  .pill.unsaved { background: #3a1a1a; color: #f85149; }
 
   /* ── Volume Tally ── */
   #tally-container { display: flex; flex-direction: column; gap: 0; }
@@ -221,9 +267,7 @@ HTML = r"""
     letter-spacing: .04em;
   }
   .tally-cc-banner:first-child { margin-top: 0; }
-
   .tally-block { margin-bottom: 2px; }
-
   .tally-block-header {
     background: #d6e4f0;
     color: #1f3864;
@@ -231,7 +275,6 @@ HTML = r"""
     font-size: 12px;
     padding: 5px 12px;
   }
-
   .tally-table {
     width: 100%;
     border-collapse: collapse;
@@ -248,7 +291,6 @@ HTML = r"""
     white-space: nowrap;
   }
   .tally-table thead th:first-child { text-align: left; }
-
   .tally-table tbody tr.trade-even { background: #ebf3fb22; }
   .tally-table tbody tr.trade-odd  { background: #0d1117; }
   .tally-table tbody tr.spread-row { background: #fff2cc18; }
@@ -268,7 +310,7 @@ HTML = r"""
   .tally-table td.highlight { color: #58a6ff; }
   .tally-table td.summary-label { color: #3fb950; font-family: Arial, sans-serif; }
 
-  /* shared */
+  /* ── shared table styles ── */
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
   thead th {
     background: #1f3864;
@@ -278,6 +320,7 @@ HTML = r"""
     white-space: nowrap;
     position: sticky;
     top: 0;
+    z-index: 1;
   }
   tbody tr:nth-child(even) { background: #161b22; }
   tbody tr:nth-child(odd)  { background: #0d1117; }
@@ -296,6 +339,20 @@ HTML = r"""
     gap: 10px;
   }
   .empty-state .icon { font-size: 48px; }
+
+  /* ── Lightbox ── */
+  #lightbox {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: #000000cc;
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+    cursor: zoom-out;
+  }
+  #lightbox.open { display: flex; }
+  #lightbox img { max-width: 90vw; max-height: 90vh; border-radius: 6px; }
 
   .spinner {
     display: inline-block;
@@ -319,20 +376,26 @@ HTML = r"""
   </div>
 </header>
 
+<!-- Lightbox -->
+<div id="lightbox" onclick="closeLightbox()">
+  <img id="lightbox-img" src="" alt="screenshot">
+</div>
+
 <div class="layout">
 
   <!-- ── LEFT PANEL ── -->
   <aside class="left">
 
     <div>
-      <label class="field-label">Screenshot</label>
+      <label class="field-label">New Screenshot</label>
       <div class="drop-zone" id="drop-zone"
            onclick="document.getElementById('file-input').click()">
         <div class="icon">🖼️</div>
         <p>Drag &amp; drop a screenshot here<br>or <strong>click to browse</strong></p>
       </div>
       <input type="file" id="file-input" accept="image/*" style="display:none">
-      <img id="preview-img" alt="preview">
+      <img id="preview-img" alt="preview" title="Click to enlarge"
+           onclick="openLightbox(this.src)">
     </div>
 
     <button class="btn btn-primary" id="parse-btn" disabled onclick="parseImage()">
@@ -343,17 +406,21 @@ HTML = r"""
       Save to Excel
     </button>
 
-    <button class="btn btn-outline" onclick="loadLog()">
-      Refresh Trade Log
-    </button>
-
-    <button class="btn btn-outline" onclick="loadTally()">
-      Refresh Volume Tally
-    </button>
-
-    <button class="btn btn-outline" onclick="downloadExcel()">
-      Download Excel ↓
-    </button>
+    <div style="border-top:1px solid #30363d;padding-top:4px">
+      <label class="field-label" style="margin-bottom:8px">Saved data</label>
+      <button class="btn btn-outline" style="margin-bottom:8px" onclick="loadHistory()">
+        Refresh History
+      </button>
+      <button class="btn btn-outline" style="margin-bottom:8px" onclick="loadLog()">
+        Refresh Trade Log
+      </button>
+      <button class="btn btn-outline" style="margin-bottom:8px" onclick="loadTally()">
+        Refresh Volume Tally
+      </button>
+      <button class="btn btn-outline" onclick="downloadExcel()">
+        Download Excel ↓
+      </button>
+    </div>
 
     <div class="status-bar" id="status">Ready — load a screenshot to begin.</div>
 
@@ -363,12 +430,13 @@ HTML = r"""
   <main class="right">
 
     <div class="tabs">
-      <div class="tab active"  onclick="switchTab('preview')">Trade Preview</div>
-      <div class="tab"         onclick="switchTab('log')">Trade Log</div>
-      <div class="tab"         onclick="switchTab('tally')">Volume Tally</div>
+      <div class="tab active" onclick="switchTab('preview')">Trade Preview</div>
+      <div class="tab"        onclick="switchTab('history')">History</div>
+      <div class="tab"        onclick="switchTab('log')">Trade Log</div>
+      <div class="tab"        onclick="switchTab('tally')">Volume Tally</div>
     </div>
 
-    <!-- Preview tab -->
+    <!-- Preview -->
     <div class="tab-content active" id="tab-preview">
       <div class="empty-state" id="preview-empty">
         <div class="icon">🔍</div>
@@ -377,7 +445,16 @@ HTML = r"""
       <div id="trades-container" style="display:none"></div>
     </div>
 
-    <!-- Log tab -->
+    <!-- History -->
+    <div class="tab-content" id="tab-history">
+      <div class="empty-state" id="history-empty">
+        <div class="icon">🗂️</div>
+        <div>No screenshots imported yet</div>
+      </div>
+      <div class="history-grid" id="history-grid" style="display:none"></div>
+    </div>
+
+    <!-- Trade Log -->
     <div class="tab-content" id="tab-log">
       <div class="empty-state" id="log-empty">
         <div class="icon">📋</div>
@@ -386,7 +463,7 @@ HTML = r"""
       <div id="log-table-wrap" style="display:none"></div>
     </div>
 
-    <!-- Tally tab -->
+    <!-- Volume Tally -->
     <div class="tab-content" id="tab-tally">
       <div class="empty-state" id="tally-empty">
         <div class="icon">📈</div>
@@ -399,19 +476,28 @@ HTML = r"""
 </div>
 
 <script>
-let parsedTrades = null;
-let imageFile    = null;
-const TAB_IDS    = ['preview', 'log', 'tally'];
+let parsedTrades  = null;
+let currentImport = null;   // import_id of the currently previewed import
+let imageFile     = null;
+const TAB_IDS     = ['preview', 'history', 'log', 'tally'];
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
 function switchTab(name) {
-  document.querySelectorAll('.tab').forEach((t, i) => {
-    t.classList.toggle('active', TAB_IDS[i] === name);
-  });
-  document.querySelectorAll('.tab-content').forEach(c => {
-    c.classList.toggle('active', c.id === 'tab-' + name);
-  });
+  document.querySelectorAll('.tab').forEach((t, i) =>
+    t.classList.toggle('active', TAB_IDS[i] === name));
+  document.querySelectorAll('.tab-content').forEach(c =>
+    c.classList.toggle('active', c.id === 'tab-' + name));
 }
+
+// ── Lightbox ──────────────────────────────────────────────────────────────────
+function openLightbox(src) {
+  document.getElementById('lightbox-img').src = src;
+  document.getElementById('lightbox').classList.add('open');
+}
+function closeLightbox() {
+  document.getElementById('lightbox').classList.remove('open');
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLightbox(); });
 
 // ── File drag & drop ──────────────────────────────────────────────────────────
 const dropZone = document.getElementById('drop-zone');
@@ -438,7 +524,8 @@ function setFile(f) {
   reader.readAsDataURL(f);
   document.getElementById('parse-btn').disabled = false;
   setStatus('Image loaded: ' + f.name, 'info');
-  parsedTrades = null;
+  parsedTrades  = null;
+  currentImport = null;
   document.getElementById('save-btn').disabled = true;
 }
 
@@ -464,11 +551,16 @@ async function parseImage() {
     const resp = await fetch('/parse', { method: 'POST', body: fd });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || resp.statusText);
-    parsedTrades = data.trades;
+
+    parsedTrades  = data.trades;
+    currentImport = data.import_id;
+
     renderTrades(data.trades);
     document.getElementById('save-btn').disabled = false;
     setStatus(`✓ ${data.raw_count} rows → ${data.trades.length} trade(s) extracted.`, 'ok');
     switchTab('preview');
+    // Refresh history badge without switching tab
+    _refreshHistoryBackground();
   } catch(e) {
     setStatus('Error: ' + e.message, 'err');
   } finally {
@@ -481,8 +573,11 @@ async function parseImage() {
 function renderTrades(trades) {
   const container = document.getElementById('trades-container');
   const empty     = document.getElementById('preview-empty');
-  if (!trades.length) { container.style.display='none'; empty.style.display='flex'; return; }
-
+  if (!trades || !trades.length) {
+    container.style.display = 'none';
+    empty.style.display = 'flex';
+    return;
+  }
   container.innerHTML = '';
   trades.forEach(t => {
     const isFlag   = t.notes && t.notes.includes('⚠');
@@ -521,7 +616,12 @@ async function saveTrades() {
     const resp = await fetch('/save', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ trades: parsedTrades, raw_count: parsedTrades.length, filename: imageFile.name }),
+      body: JSON.stringify({
+        trades:    parsedTrades,
+        raw_count: parsedTrades.length,
+        filename:  imageFile.name,
+        import_id: currentImport,
+      }),
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || resp.statusText);
@@ -529,12 +629,100 @@ async function saveTrades() {
     parsedTrades = null;
     btn.disabled = true;
     loadTally();
+    _refreshHistoryBackground();
     switchTab('tally');
   } catch(e) {
     setStatus('Error: ' + e.message, 'err');
     btn.disabled = false;
   }
   btn.textContent = 'Save to Excel';
+}
+
+// ── History ───────────────────────────────────────────────────────────────────
+let _historyCache = [];
+
+async function loadHistory() {
+  setStatus('Loading history…', 'info');
+  try {
+    const resp = await fetch('/history');
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || resp.statusText);
+    _historyCache = data.imports;
+    renderHistory(data.imports);
+    setStatus(`History: ${data.imports.length} import(s).`, 'ok');
+    switchTab('history');
+  } catch(e) { setStatus('Error: ' + e.message, 'err'); }
+}
+
+async function _refreshHistoryBackground() {
+  try {
+    const resp = await fetch('/history');
+    const data = await resp.json();
+    if (resp.ok) { _historyCache = data.imports; renderHistory(data.imports); }
+  } catch(_) {}
+}
+
+function renderHistory(imports) {
+  const grid  = document.getElementById('history-grid');
+  const empty = document.getElementById('history-empty');
+  if (!imports.length) { grid.style.display='none'; empty.style.display='flex'; return; }
+
+  grid.innerHTML = '';
+  imports.forEach(imp => {
+    const saved    = imp.added != null;
+    const pill     = saved
+      ? `<span class="pill saved">✓ ${imp.added} saved, ${imp.skipped} skipped</span>`
+      : `<span class="pill unsaved">Not yet saved to Excel</span>`;
+    const isCur    = imp.id === currentImport;
+
+    grid.insertAdjacentHTML('beforeend', `
+      <div class="history-card ${isCur ? 'active-import' : ''}"
+           onclick="loadImport(${imp.id})">
+        <img src="/screenshot/${imp.id}" alt="${imp.original_name}"
+             onerror="this.style.display='none'"
+             onclick="event.stopPropagation(); openLightbox(this.src)">
+        <div class="history-card-body">
+          <div class="filename" title="${imp.original_name}">${imp.original_name}</div>
+          <div class="ts">${imp.imported_at}</div>
+          <div class="pills">
+            <span class="pill">${imp.raw_row_count} rows</span>
+            <span class="pill">${imp.trade_count} trades</span>
+            ${pill}
+          </div>
+        </div>
+      </div>`);
+  });
+  grid.style.display  = 'grid';
+  empty.style.display = 'none';
+}
+
+async function loadImport(importId) {
+  setStatus('Loading past import…', 'info');
+  try {
+    const resp = await fetch(`/import/${importId}/trades`);
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || resp.statusText);
+
+    currentImport = importId;
+    parsedTrades  = data.trades;
+
+    // Show the stored screenshot in the left panel
+    const img = document.getElementById('preview-img');
+    img.src   = `/screenshot/${importId}`;
+    img.style.display = 'block';
+    document.getElementById('drop-zone').style.display = 'none';
+
+    // Enable Save button (lets user re-save if needed)
+    document.getElementById('save-btn').disabled = false;
+
+    renderTrades(data.trades);
+    setStatus(`Loaded import #${importId} — ${data.trades.length} trade(s).`, 'ok');
+    switchTab('preview');
+
+    // Highlight active card
+    document.querySelectorAll('.history-card').forEach(c =>
+      c.classList.toggle('active-import', parseInt(c.getAttribute('onclick').match(/\d+/)[0]) === importId));
+  } catch(e) { setStatus('Error: ' + e.message, 'err'); }
 }
 
 // ── Trade log ─────────────────────────────────────────────────────────────────
@@ -558,7 +746,6 @@ function renderLog(rows) {
   const cols    = ['Timestamp','Type','Notes','CC','Qty','Hub','Spread Px',
                    'Leg1 Strip','Leg1 Px','Leg2 Strip','Leg2 Px','Leg3 Strip','Leg3 Px','Source'];
   const numCols = new Set([4,6,8,10,12]);
-
   wrap.innerHTML = `
     <table>
       <thead><tr>${cols.map(c=>`<th>${c}</th>`).join('')}</tr></thead>
@@ -579,7 +766,7 @@ async function loadTally() {
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || resp.statusText);
     renderTally(data.groups);
-    const total = data.groups.reduce((s,g) => s + g.blocks.reduce((b,bl) => b + bl.trades.length, 0), 0);
+    const total = data.groups.reduce((s,g) => s + g.blocks.reduce((b,bl)=>b+bl.trades.length,0), 0);
     setStatus(`Volume Tally: ${data.groups.length} CC(s), ${total} trade row(s).`, 'ok');
     switchTab('tally');
   } catch(e) { setStatus('Error: ' + e.message, 'err'); }
@@ -589,7 +776,6 @@ function fmt(v) {
   if (v == null) return '';
   const n = parseFloat(v);
   if (isNaN(n)) return v;
-  // show up to 6 sig figs, strip trailing zeros
   return n % 1 === 0 ? n.toLocaleString() : parseFloat(n.toPrecision(6)).toString();
 }
 
@@ -599,44 +785,34 @@ function renderTally(groups) {
   if (!groups || !groups.length) { container.style.display='none'; empty.style.display='flex'; return; }
 
   container.innerHTML = '';
-
   groups.forEach(g => {
-    container.insertAdjacentHTML('beforeend',
-      `<div class="tally-cc-banner">⬛ ${g.cc}</div>`);
-
+    container.insertAdjacentHTML('beforeend', `<div class="tally-cc-banner">⬛ ${g.cc}</div>`);
     g.blocks.forEach(bl => {
       const isSpread = bl.kind !== 'OUTRIGHT';
       const rows = bl.trades.map((t, i) => {
-        const rowCls = isSpread
-          ? 'spread-row'
-          : i % 2 === 0 ? 'trade-even' : 'trade-odd';
-        return `<tr class="${rowCls}">
-          <td></td>
-          <td>${t.ts}</td>
+        const rc = isSpread ? 'spread-row' : i%2===0 ? 'trade-even' : 'trade-odd';
+        return `<tr class="${rc}">
+          <td></td><td>${t.ts}</td>
           <td>${fmt(t.qty)}</td>
           <td class="highlight">${fmt(t.price)}</td>
           <td>${fmt(t.cumvol)}</td>
           <td class="highlight">${fmt(t.vwap)}</td>
         </tr>`;
       }).join('');
-
       container.insertAdjacentHTML('beforeend', `
         <div class="tally-block">
           <div class="tally-block-header">${bl.label}</div>
           <table class="tally-table">
-            <thead>
-              <tr>
-                <th style="text-align:left;width:30%">Strip / Spread</th>
-                <th>Timestamp</th><th>Qty</th><th>Price</th>
-                <th>Cumul. Vol</th><th>VWAP</th>
-              </tr>
-            </thead>
+            <thead><tr>
+              <th style="text-align:left;width:30%">Strip / Spread</th>
+              <th>Timestamp</th><th>Qty</th><th>Price</th>
+              <th>Cumul. Vol</th><th>VWAP</th>
+            </tr></thead>
             <tbody>
               ${rows}
               <tr class="summary-row">
                 <td class="summary-label" colspan="2">► Cumul. Vol / VWAP</td>
-                <td>${fmt(bl.total_qty)}</td>
-                <td></td>
+                <td>${fmt(bl.total_qty)}</td><td></td>
                 <td>${fmt(bl.total_qty)}</td>
                 <td class="highlight">${fmt(bl.final_vwap)}</td>
               </tr>
@@ -645,7 +821,6 @@ function renderTally(groups) {
         </div>`);
     });
   });
-
   container.style.display = 'flex';
   container.style.flexDirection = 'column';
   empty.style.display = 'none';
@@ -653,13 +828,18 @@ function renderTally(groups) {
 
 // ── Download ──────────────────────────────────────────────────────────────────
 function downloadExcel() { window.location.href = '/download'; }
+
+// ── Auto-load history on page load ───────────────────────────────────────────
+window.addEventListener('load', () => _refreshHistoryBackground().then(() => {
+  if (_historyCache.length) { renderHistory(_historyCache); switchTab('history'); }
+}));
 </script>
 </body>
 </html>
 """
 
 
-# ── Tally computation (mirrors _rebuild_tally but returns JSON) ────────────────
+# ── Tally computation ──────────────────────────────────────────────────────────
 
 def _compute_tally():
     if not EXCEL_PATH.exists():
@@ -672,14 +852,16 @@ def _compute_tally():
     for row in ws.iter_rows(min_row=2, values_only=True):
         if not row[0]:
             continue
-        ts, tt, cc, qty, sp = str(row[0]), str(row[1]), str(row[3] or ""), row[4] or 0, row[6]
+        ts, tt, cc = str(row[0]), str(row[1]), str(row[3] or "")
+        qty, sp = row[4] or 0, row[6]
         legs = []
         for i in range(3):
             base = 7 + i * 2
             s, p = row[base], row[base + 1]
             if s:
                 legs.append({"strip": str(s), "price": float(p) if p else 0.0})
-        all_trades.append({"ts": ts, "tt": tt, "cc": cc, "qty": float(qty), "sp": sp, "legs": legs})
+        all_trades.append({"ts": ts, "tt": tt, "cc": cc,
+                           "qty": float(qty), "sp": sp, "legs": legs})
     wb.close()
 
     if not all_trades:
@@ -712,14 +894,11 @@ def _compute_tally():
     }
     sorted_keys = sorted(buckets, key=lambda k: (k[0], KIND_ORDER.get(k[2], 9), k[1]))
 
-    # Build output grouped by CC
     cc_groups = {}
     for key in sorted_keys:
         cc_key, strip_label, kind = key
         recs = buckets[key]
-
-        cumvol = 0.0
-        vwap_num = 0.0
+        cumvol = vwap_num = 0.0
         trade_rows = []
         for rec in recs:
             q, p = rec["qty"], rec["price"]
@@ -728,18 +907,14 @@ def _compute_tally():
             vwap = round(vwap_num / cumvol, 6) if cumvol else None
             trade_rows.append({"ts": rec["ts"], "qty": q, "price": p,
                                 "cumvol": cumvol, "vwap": vwap})
-
         final_vwap = round(vwap_num / cumvol, 6) if cumvol else None
-
-        block = {
+        cc_groups.setdefault(cc_key, []).append({
             "label":      f"{strip_label}  [{KIND_LABEL[kind]}]",
             "kind":       kind,
             "trades":     trade_rows,
             "total_qty":  cumvol,
             "final_vwap": final_vwap,
-        }
-
-        cc_groups.setdefault(cc_key, []).append(block)
+        })
 
     return [{"cc": cc, "blocks": blocks} for cc, blocks in cc_groups.items()]
 
@@ -763,9 +938,10 @@ def parse():
         tmp_path = tmp.name
 
     try:
-        raw_rows = parse_image_local(tmp_path)
-        trades   = group_rows_into_trades(raw_rows)
-        return jsonify(raw_count=len(raw_rows), trades=trades)
+        raw_rows  = parse_image_local(tmp_path)
+        trades    = group_rows_into_trades(raw_rows)
+        import_id = database.save_import(image.filename, tmp_path, raw_rows, trades)
+        return jsonify(raw_count=len(raw_rows), trades=trades, import_id=import_id)
     except Exception as e:
         return jsonify(error=str(e)), 500
     finally:
@@ -778,14 +954,42 @@ def save():
     trades    = data.get("trades", [])
     raw_count = data.get("raw_count", len(trades))
     filename  = data.get("filename", "screengrab")
+    import_id = data.get("import_id")
 
     try:
         if not EXCEL_PATH.exists():
             build_fresh_workbook(str(EXCEL_PATH))
         added, skipped = append_trades(str(EXCEL_PATH), trades, raw_count, filename)
+        if import_id:
+            database.update_save_counts(import_id, added, skipped)
         return jsonify(added=added, skipped=skipped)
     except Exception as e:
         return jsonify(error=str(e)), 500
+
+
+@app.route("/history")
+def history():
+    try:
+        return jsonify(imports=database.list_imports())
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
+@app.route("/import/<int:import_id>/trades")
+def import_trades(import_id):
+    try:
+        trades = database.get_import_trades(import_id)
+        return jsonify(trades=trades)
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
+@app.route("/screenshot/<int:import_id>")
+def screenshot(import_id):
+    path = database.get_screenshot_path(import_id)
+    if not path or not path.exists():
+        return "Not found", 404
+    return send_file(str(path))
 
 
 @app.route("/log")
@@ -808,8 +1012,7 @@ def log():
 @app.route("/tally")
 def tally():
     try:
-        groups = _compute_tally()
-        return jsonify(groups=groups)
+        return jsonify(groups=_compute_tally())
     except Exception as e:
         return jsonify(error=str(e)), 500
 
