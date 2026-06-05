@@ -25,6 +25,11 @@ app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024  # 20 MB upload limit
 database.init_db()
 
 EXCEL_PATH = Path(__file__).parent / "trade_tally_v4.xlsx"
+
+# Auto-reset on startup if data is from a previous business day
+if database.is_new_business_day():
+    print("New business day detected — archiving previous data and resetting.")
+    database.reset_day(EXCEL_PATH)
 ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"}
 
 
@@ -381,11 +386,24 @@ HTML = r"""
 <body>
 
 <header>
-  <div>
+  <div style="flex:1">
     <h1>📊 Trade Accumulator</h1>
     <span>Blotter screengrab → Excel workbook</span>
   </div>
+  <div id="day-info" style="text-align:right;font-size:12px;color:#a8c4e0"></div>
 </header>
+
+<!-- Stale-data banner (hidden until JS detects previous-day data) -->
+<div id="stale-banner" style="display:none;background:#3a1a00;border-bottom:1px solid #f0b429;
+     padding:10px 24px;display:none;align-items:center;gap:16px">
+  <span style="color:#f0b429;font-weight:bold">⚠ Data from a previous trading day is loaded.</span>
+  <button onclick="newTradingDay()"
+          style="background:#c05000;color:#fff;border:none;border-radius:5px;
+                 padding:6px 14px;font-weight:bold;cursor:pointer;font-size:12px">
+    Start New Trading Day
+  </button>
+  <span style="color:#8b7050;font-size:11px">Previous data will be archived before wiping.</span>
+</div>
 
 <!-- Lightbox -->
 <div id="lightbox" onclick="closeLightbox()">
@@ -423,6 +441,10 @@ HTML = r"""
 
     <div style="border-top:1px solid #30363d;padding-top:4px">
       <label class="field-label" style="margin-bottom:8px">Saved data</label>
+      <button class="btn" style="margin-bottom:8px;background:#c05000;color:#fff"
+              onclick="newTradingDay()">
+        🗓 New Trading Day
+      </button>
       <button class="btn btn-outline" style="margin-bottom:8px" onclick="loadHistory()">
         Refresh History
       </button>
@@ -861,10 +883,58 @@ function renderTally(groups) {
 // ── Download ──────────────────────────────────────────────────────────────────
 function downloadExcel() { window.location.href = '/download'; }
 
+// ── Day status ────────────────────────────────────────────────────────────────
+async function checkDayStatus() {
+  try {
+    const resp = await fetch('/day-status');
+    const d    = await resp.json();
+    const info = document.getElementById('day-info');
+    info.textContent = `Today: ${d.today}` + (d.last_import_date ? `  |  Last data: ${d.last_import_date}` : '');
+    const banner = document.getElementById('stale-banner');
+    banner.style.display = d.new_business_day ? 'flex' : 'none';
+  } catch(_) {}
+}
+
+async function newTradingDay() {
+  if (!confirm('Archive and wipe all current data to start a fresh trading day?')) return;
+  setStatus('Archiving and resetting…', 'info');
+  try {
+    const resp = await fetch('/reset', { method: 'POST' });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error);
+
+    // Clear UI state
+    parsedTrades = null; currentImport = null; imageFile = null;
+    document.getElementById('preview-img').style.display = 'none';
+    document.getElementById('drop-zone').style.display   = 'block';
+    document.getElementById('parse-btn').disabled = true;
+    document.getElementById('save-btn').disabled  = true;
+    document.getElementById('next-btn').style.display = 'none';
+    document.getElementById('trades-container').innerHTML = '';
+    document.getElementById('preview-empty').style.display = 'flex';
+    document.getElementById('log-table-wrap').style.display  = 'none';
+    document.getElementById('log-empty').style.display       = 'flex';
+    document.getElementById('tally-container').innerHTML = '';
+    document.getElementById('tally-empty').style.display = 'flex';
+
+    _historyCache = [];
+    renderHistory([]);
+    document.getElementById('stale-banner').style.display = 'none';
+    checkDayStatus();
+    setStatus('✓ New trading day started. Previous data archived.', 'ok');
+    switchTab('preview');
+  } catch(e) {
+    setStatus('Reset failed: ' + e.message, 'err');
+  }
+}
+
 // ── Auto-load history on page load ───────────────────────────────────────────
-window.addEventListener('load', () => _refreshHistoryBackground().then(() => {
-  if (_historyCache.length) { renderHistory(_historyCache); switchTab('history'); }
-}));
+window.addEventListener('load', () => {
+  checkDayStatus();
+  _refreshHistoryBackground().then(() => {
+    if (_historyCache.length) { renderHistory(_historyCache); switchTab('history'); }
+  });
+});
 </script>
 </body>
 </html>
@@ -1068,6 +1138,27 @@ def log():
 def tally():
     try:
         return jsonify(groups=_compute_tally())
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
+@app.route("/day-status")
+def day_status():
+    """Return today's date, last import date, and whether a reset is suggested."""
+    from datetime import date
+    return jsonify(
+        today=str(date.today()),
+        last_import_date=database.get_last_import_date(),
+        new_business_day=database.is_new_business_day(),
+    )
+
+
+@app.route("/reset", methods=["POST"])
+def reset():
+    """Archive the current Excel file and wipe the DB + screenshots."""
+    try:
+        database.reset_day(EXCEL_PATH)
+        return jsonify(ok=True)
     except Exception as e:
         return jsonify(error=str(e)), 500
 

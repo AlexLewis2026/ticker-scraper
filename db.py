@@ -11,6 +11,7 @@ from pathlib import Path
 
 DB_PATH         = Path(__file__).parent / "scraper.db"
 SCREENSHOTS_DIR = Path(__file__).parent / "screenshots"
+ARCHIVE_DIR     = Path(__file__).parent / "archive"
 
 
 def _connect(db_path: Path | None = None) -> sqlite3.Connection:
@@ -195,6 +196,87 @@ def get_screenshot_path(import_id: int, db_path: Path | None = None) -> Path | N
             "SELECT screenshot_path FROM imports WHERE id=?", (import_id,)
         ).fetchone()
     return Path(row["screenshot_path"]) if row else None
+
+
+# ── Day boundary helpers ───────────────────────────────────────────────────────
+
+def get_last_import_date(db_path: Path | None = None) -> str | None:
+    """Return the date (YYYY-MM-DD) of the most recent import, or None if empty."""
+    path = db_path or DB_PATH
+    if not path.exists():
+        return None
+    try:
+        with _connect(db_path) as con:
+            row = con.execute(
+                "SELECT imported_at FROM imports ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        if row:
+            return row["imported_at"][:10]   # "YYYY-MM-DD"
+    except Exception:
+        pass
+    return None
+
+
+def is_new_business_day(db_path: Path | None = None) -> bool:
+    """
+    Return True if the DB contains data from a previous business day.
+    Weekends are skipped — Monday detects Friday's data as stale.
+    """
+    from datetime import date, timedelta
+
+    last = get_last_import_date(db_path)
+    if not last:
+        return False
+
+    today = date.today()
+    last_date = date.fromisoformat(last)
+
+    if last_date >= today:
+        return False
+
+    # Walk backwards from today to find the last business day
+    prev = today - timedelta(days=1)
+    while prev.weekday() >= 5:          # 5=Sat, 6=Sun
+        prev -= timedelta(days=1)
+
+    return last_date < prev or (last_date == prev and today != prev)
+
+
+def reset_day(excel_path: Path,
+              db_path: Path | None = None,
+              screenshots_dir: Path | None = None,
+              archive_dir: Path | None = None):
+    """
+    Archive today's Excel file and wipe the DB + screenshots.
+    Safe to call even if files don't exist.
+    """
+    from datetime import date
+
+    archive = archive_dir or ARCHIVE_DIR
+    shots   = screenshots_dir or SCREENSHOTS_DIR
+    db      = db_path or DB_PATH
+
+    archive.mkdir(parents=True, exist_ok=True)
+
+    # Archive Excel with the date it covers (last import date or today)
+    trade_date = get_last_import_date(db_path) or str(date.today())
+    if excel_path.exists():
+        dest = archive / f"{trade_date}_trade_tally.xlsx"
+        shutil.copy2(excel_path, dest)
+        excel_path.unlink()
+
+    # Wipe screenshots
+    if shots.exists():
+        for f in shots.iterdir():
+            f.unlink(missing_ok=True)
+
+    # Wipe DB
+    for suffix in ("", "-shm", "-wal"):
+        p = db.parent / (db.name + suffix)
+        p.unlink(missing_ok=True)
+
+    # Re-initialise fresh DB
+    init_db(db_path=db, screenshots_dir=shots)
 
 
 def get_all_trades(db_path: Path | None = None) -> list[dict]:
