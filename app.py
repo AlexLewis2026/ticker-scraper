@@ -402,6 +402,10 @@ HTML = r"""
       Parse Screenshot
     </button>
 
+    <button class="btn btn-outline" id="next-btn" style="display:none" onclick="resetForNext()">
+      + Parse Next Screenshot
+    </button>
+
     <button class="btn btn-success" id="save-btn" disabled onclick="saveTrades()">
       Save to Excel
     </button>
@@ -536,6 +540,23 @@ function setStatus(msg, type='') {
   el.className = 'status-bar' + (type ? ' ' + type : '');
 }
 
+// ── Reset for next screenshot ─────────────────────────────────────────────────
+function resetForNext() {
+  imageFile     = null;
+  parsedTrades  = null;
+  currentImport = null;
+
+  const img = document.getElementById('preview-img');
+  img.src   = '';
+  img.style.display = 'none';
+  document.getElementById('drop-zone').style.display = 'block';
+  document.getElementById('parse-btn').disabled = true;
+  document.getElementById('save-btn').disabled  = true;
+  document.getElementById('next-btn').style.display = 'none';
+  document.getElementById('file-input').value = '';
+  setStatus('Ready — load the next screenshot.', '');
+}
+
 // ── Parse image ───────────────────────────────────────────────────────────────
 async function parseImage() {
   if (!imageFile) { setStatus('Select a screenshot first.', 'err'); return; }
@@ -559,6 +580,7 @@ async function parseImage() {
     document.getElementById('save-btn').disabled = false;
     const dupMsg = data.dup_count > 0 ? `, ${data.dup_count} duplicate row(s) ignored` : '';
     setStatus(`✓ ${data.raw_count} rows scanned → ${data.new_count} new → ${data.trades.length} trade(s) extracted${dupMsg}.`, 'ok');
+    document.getElementById('next-btn').style.display = 'block';
     switchTab('preview');
     // Refresh history badge without switching tab
     _refreshHistoryBackground();
