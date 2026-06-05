@@ -553,8 +553,8 @@ function setStatus(msg, type='') {
 
 // ── Reset for next screenshot ─────────────────────────────────────────────────
 function resetForNext() {
+  // Reset file selection only — leave the trade preview intact until new trades arrive
   imageFile     = null;
-  parsedTrades  = null;
   currentImport = null;
 
   const img = document.getElementById('preview-img');
@@ -640,7 +640,7 @@ function renderTrades(trades) {
 
 // ── Save trades ───────────────────────────────────────────────────────────────
 async function saveTrades() {
-  if (!parsedTrades) { setStatus('Parse a screenshot first.', 'err'); return; }
+  if (!parsedTrades || !parsedTrades.length) { setStatus('Parse a screenshot first.', 'err'); return; }
   const btn = document.getElementById('save-btn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>Saving…';
@@ -660,11 +660,9 @@ async function saveTrades() {
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || resp.statusText);
     setStatus(`✓ Saved! ${data.added} new trade(s) added, ${data.skipped} duplicate(s) skipped.`, 'ok');
-    parsedTrades = null;
     btn.disabled = true;
-    loadTally();
     _refreshHistoryBackground();
-    switchTab('tally');
+    loadTally();
   } catch(e) {
     setStatus('Error: ' + e.message, 'err');
     btn.disabled = false;
