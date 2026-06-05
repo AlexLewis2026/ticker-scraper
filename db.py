@@ -195,3 +195,24 @@ def get_screenshot_path(import_id: int, db_path: Path | None = None) -> Path | N
             "SELECT screenshot_path FROM imports WHERE id=?", (import_id,)
         ).fetchone()
     return Path(row["screenshot_path"]) if row else None
+
+
+def get_all_trades(db_path: Path | None = None) -> list[dict]:
+    """
+    Return every trade across all imports, oldest first, with the source
+    filename attached. Used by the Trade Log and Volume Tally routes so they
+    reflect parsed data immediately without needing an Excel save.
+    """
+    with _connect(db_path) as con:
+        rows = con.execute(
+            """SELECT t.trade_json, i.original_name
+               FROM trades t
+               JOIN imports i ON i.id = t.import_id
+               ORDER BY t.id ASC"""
+        ).fetchall()
+    result = []
+    for r in rows:
+        trade = json.loads(r["trade_json"])
+        trade["source_file"] = r["original_name"]
+        result.append(trade)
+    return result

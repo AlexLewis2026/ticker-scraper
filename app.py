@@ -876,46 +876,31 @@ window.addEventListener('load', () => _refreshHistoryBackground().then(() => {
 # ── Tally computation ──────────────────────────────────────────────────────────
 
 def _compute_tally():
-    if not EXCEL_PATH.exists():
-        return []
-
-    wb = load_workbook(str(EXCEL_PATH), read_only=True, data_only=True)
-    ws = wb[SH_LOG]
-
-    all_trades = []
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        if not row[0]:
-            continue
-        ts, tt, cc = str(row[0]), str(row[1]), str(row[3] or "")
-        qty, sp = row[4] or 0, row[6]
-        legs = []
-        for i in range(3):
-            base = 7 + i * 2
-            s, p = row[base], row[base + 1]
-            if s:
-                legs.append({"strip": str(s), "price": float(p) if p else 0.0})
-        all_trades.append({"ts": ts, "tt": tt, "cc": cc,
-                           "qty": float(qty), "sp": sp, "legs": legs})
-    wb.close()
-
+    all_trades = database.get_all_trades()
     if not all_trades:
         return []
 
     buckets = defaultdict(list)
     for t in all_trades:
-        cc, qty, legs, tt = t["cc"], t["qty"], t["legs"], t["tt"]
+        cc   = t.get("cc", "")
+        qty  = float(t.get("qty") or 0)
+        legs = t.get("legs", [])
+        tt   = t.get("trade_type", "")
+        ts   = t.get("timestamp", "")
+        sp   = t.get("spread_price")
+
         if tt == "OUTRIGHT" and legs:
             l = legs[0]
             buckets[(cc, l["strip"], "OUTRIGHT")].append(
-                {"ts": t["ts"], "qty": qty, "price": l["price"]})
+                {"ts": ts, "qty": qty, "price": float(l["price"])})
         elif tt == "SPREAD":
             for l in legs:
                 buckets[(cc, l["strip"], "SPREAD_LEG")].append(
-                    {"ts": t["ts"], "qty": qty, "price": l["price"]})
-            if t["sp"] is not None:
+                    {"ts": ts, "qty": qty, "price": float(l["price"])})
+            if sp is not None:
                 diff_label = " / ".join(l["strip"] for l in legs)
                 buckets[(cc, diff_label, "SPREAD_DIFF")].append(
-                    {"ts": t["ts"], "qty": qty, "price": float(t["sp"])})
+                    {"ts": ts, "qty": qty, "price": float(sp)})
 
     for k in buckets:
         buckets[k].sort(key=lambda x: x["ts"])
@@ -1044,16 +1029,20 @@ def screenshot(import_id):
 
 @app.route("/log")
 def log():
-    if not EXCEL_PATH.exists():
-        return jsonify(rows=[])
     try:
-        wb   = load_workbook(str(EXCEL_PATH), read_only=True, data_only=True)
-        ws   = wb[SH_LOG]
+        trades = database.get_all_trades()
         rows = []
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            if row[0]:
-                rows.append([str(v) if v is not None else None for v in row])
-        wb.close()
+        for t in trades:
+            legs = t.get("legs", [])
+            def leg(i, f): return legs[i][f] if i < len(legs) else None
+            rows.append([
+                t.get("timestamp"), t.get("trade_type"), t.get("notes"),
+                t.get("cc"), t.get("qty"), t.get("hub"), t.get("spread_price"),
+                leg(0, "strip"), leg(0, "price"),
+                leg(1, "strip"), leg(1, "price"),
+                leg(2, "strip"), leg(2, "price"),
+                t.get("source_file"),
+            ])
         return jsonify(rows=rows)
     except Exception as e:
         return jsonify(error=str(e)), 500
