@@ -21,9 +21,20 @@ from openpyxl import load_workbook
 import db as database
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024  # 20 MB upload limit
 database.init_db()
 
 EXCEL_PATH = Path(__file__).parent / "trade_tally_v4.xlsx"
+ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"}
+
+
+def _allowed_image(filename: str) -> bool:
+    return Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
+
+
+@app.errorhandler(413)
+def upload_too_large(e):
+    return jsonify(error="Image file is too large (max 20 MB)."), 413
 
 
 # ── HTML ───────────────────────────────────────────────────────────────────────
@@ -952,34 +963,46 @@ def index():
 @app.route("/parse", methods=["POST"])
 def parse():
     image = request.files.get("image")
-    if not image:
+    if not image or not image.filename:
         return jsonify(error="No image uploaded."), 400
+    if not _allowed_image(image.filename):
+        return jsonify(error=f"Unsupported file type. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"), 400
 
-    suffix = Path(image.filename).suffix or ".png"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        image.save(tmp.name)
-        tmp_path = tmp.name
-
+    suffix = Path(image.filename).suffix.lower() or ".png"
+    tmp_path = None
     try:
-        all_rows             = parse_image_local(tmp_path)
-        raw_rows, dup_count  = database.filter_new_rows(all_rows)
-        trades               = group_rows_into_trades(raw_rows)
-        import_id            = database.save_import(image.filename, tmp_path, raw_rows, trades)
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            image.save(tmp.name)
+            tmp_path = tmp.name
+
+        all_rows            = parse_image_local(tmp_path)
+        raw_rows, dup_count = database.filter_new_rows(all_rows)
+        trades              = group_rows_into_trades(raw_rows)
+        import_id           = database.save_import(image.filename, tmp_path, raw_rows, trades)
         return jsonify(raw_count=len(all_rows), new_count=len(raw_rows),
                        dup_count=dup_count, trades=trades, import_id=import_id)
+    except (FileNotFoundError, ValueError) as e:
+        return jsonify(error=str(e)), 400
     except Exception as e:
-        return jsonify(error=str(e)), 500
+        return jsonify(error=f"Parse failed: {e}"), 500
     finally:
-        os.unlink(tmp_path)
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
 
 
 @app.route("/save", methods=["POST"])
 def save():
-    data      = request.get_json()
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify(error="Invalid or missing JSON body."), 400
+
     trades    = data.get("trades", [])
     raw_count = data.get("raw_count", len(trades))
     filename  = data.get("filename", "screengrab")
     import_id = data.get("import_id")
+
+    if not isinstance(trades, list):
+        return jsonify(error="'trades' must be a list."), 400
 
     try:
         if not EXCEL_PATH.exists():
@@ -988,8 +1011,10 @@ def save():
         if import_id:
             database.update_save_counts(import_id, added, skipped)
         return jsonify(added=added, skipped=skipped)
+    except PermissionError:
+        return jsonify(error="Excel file is open in another program. Close it and try again."), 409
     except Exception as e:
-        return jsonify(error=str(e)), 500
+        return jsonify(error=f"Save failed: {e}"), 500
 
 
 @app.route("/history")
