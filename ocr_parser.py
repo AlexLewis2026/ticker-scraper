@@ -11,8 +11,19 @@ from pathlib import Path
 
 TESSERACT_CMD = r"C:\Users\AlexLewis\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
 
-# Hub names always start with one of these words (after stripping OCR junk)
-HUB_START_WORDS = {"Naphtha", "Sing", "Argus"}
+# Hub names always start with one of these words (after stripping OCR junk).
+# Add new hub prefixes here whenever a new blotter hub is encountered.
+HUB_START_WORDS = {
+    "Naphtha",  # Naphtha CIF NWE Cg, Naphtha C&F Japan Cg
+    "Sing",     # Sing Mogas 92 Unl (Platts)/Brent 1st Line
+    "Argus",    # Argus Eurobob Oxy FOB Rdam Bg
+    "Far",      # Far East
+    "Saudi",    # Saudi CP
+    "MT",       # MT B-ETR, MT B-ENT
+    "Conway",   # Conway (propane hub)
+    "CIF",      # CIF ARA
+    "FOB",      # FOB Rotterdam etc.
+}
 
 # Valid CC codes: 2-5 uppercase letters
 CC_PATTERN = re.compile(r"^[A-Z]{2,5}$")

@@ -68,6 +68,28 @@ class TestParseLine:
         assert row is not None
         assert "Argus" in row["hub"]
 
+    def test_far_east_hub(self):
+        line = "10:13:01 BST AFE 2 Aug26 Far East 667.00 © BLK"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["hub"] == "Far East"
+        assert row["cc"]  == "AFE"
+        assert row["qty"] == 2
+
+    def test_saudi_cp_hub(self):
+        line = "10:07:33 BST SCP 1 Oct26 Saudi CP 581.00 © BLK"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["hub"] == "Saudi CP"
+        assert row["cc"]  == "SCP"
+
+    def test_mt_betr_hub(self):
+        line = "09:56:15 BST PRL 12 Jul26 MT B-ETR 0.800000 © BLK"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["hub"] == "MT B-ETR"
+        assert row["cc"]  == "PRL"
+
     def test_ocr_junk_on_hub_stripped(self):
         """Leading '=' or '©' on hub word should be stripped."""
         line = "13:00:40 BST 4Bal Month/Jul26 =Naphtha CIF NWE Cg 11.50 © BLK"
