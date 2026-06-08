@@ -19,8 +19,18 @@ CC_PATTERN = re.compile(r"^[A-Z]{2,5}$")
 # Timestamp: HH:MM:SS + any timezone abbreviation (BST, GMT, UTC, CET …)
 TS_RE = re.compile(r"^(\d{2}:\d{2}:\d{2})\s+([A-Z]{2,5})\s+(.*)", re.DOTALL)
 
-# Price at end of line: last number before optional junk + trade-type code
-PRICE_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s+\S*\s*[A-Z]{2,5}\s*$", re.IGNORECASE)
+# Price at end of line: last number before optional bullet + TT code.
+# TT code may be a short code (BLK, AGR) or the word "cancelled".
+PRICE_RE = re.compile(
+    r"(-?\d+(?:\.\d+)?)"       # price
+    r"\s+\S*\s*"               # optional bullet / junk char
+    r"([A-Za-z]{2,})"         # TT code: BLK, cancelled, etc.
+    r"\s*$",
+    re.IGNORECASE
+)
+
+# TT values that indicate a cancelled trade (case-insensitive match)
+_CANCEL_TT = {"cancelled", "cancel", "cxl"}
 
 # Qty stuck to first strip word, e.g. "4Bal" "5Aug26" "1Q3"
 QTY_STUCK_RE = re.compile(r"^(\d+)([A-Za-z].*)$")
@@ -109,7 +119,9 @@ def _parse_line(line: str) -> dict | None:
         price = float(pm.group(1))
     except ValueError:
         return None
-    rest = rest[: pm.start()].strip()
+    tt_code   = pm.group(2).lower()
+    cancelled = tt_code in _CANCEL_TT
+    rest      = rest[: pm.start()].strip()
 
     tokens = rest.split()
     if not tokens:
@@ -189,6 +201,7 @@ def _parse_line(line: str) -> dict | None:
         "hub":         hub,
         "price":       price,
         "is_diff_row": is_diff,
+        "cancelled":   cancelled,
     }
 
 

@@ -178,8 +178,25 @@ def group_rows_into_trades(raw_rows: list[dict]) -> list[dict]:
             cc_map.setdefault(row["cc"], []).append(row)
 
         for cc, cc_rows in cc_map.items():
-            diff_rows = [r for r in cc_rows if r.get("is_diff_row")]
-            leg_rows  = [r for r in cc_rows if not r.get("is_diff_row")]
+            # Separate cancelled rows — they are recorded but excluded from grouping
+            cancelled_rows = [r for r in cc_rows if r.get("cancelled")]
+            active_rows    = [r for r in cc_rows if not r.get("cancelled")]
+
+            # Record each cancelled row as its own CANCELLED trade
+            for cr in cancelled_rows:
+                trades.append({
+                    "timestamp":    ts,
+                    "trade_type":   "CANCELLED",
+                    "notes":        "Cancelled trade — excluded from tally",
+                    "cc":           cc,
+                    "qty":          cr["qty"],
+                    "hub":          cr.get("hub", ""),
+                    "spread_price": None,
+                    "legs": [{"strip": cr["strip"], "price": cr["price"]}],
+                })
+
+            diff_rows = [r for r in active_rows if r.get("is_diff_row")]
+            leg_rows  = [r for r in active_rows if not r.get("is_diff_row")]
 
             if len(leg_rows) == 0:
                 continue
@@ -477,6 +494,8 @@ def _rebuild_tally(wb):
     for t in all_trades:
         cc, qty, legs, tt = t["cc"], t["qty"], t["legs"], t["tt"]
 
+        if tt == "CANCELLED":
+            continue
         if tt in ("OUTRIGHT", "TAPS") and legs:
             l = legs[0]
             buckets[(cc, l["strip"], tt)].append(

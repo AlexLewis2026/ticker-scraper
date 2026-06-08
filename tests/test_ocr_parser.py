@@ -242,6 +242,19 @@ class TestParseLine:
 
 class TestParseImageLocal:
 
+    def test_cancelled_trade_flagged(self):
+        line = "13:02:53 BST 50 STB Jul26 Sing Mogas 92 Unl 17.25 © cancelled"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["cancelled"] is True
+        assert row["price"] == 17.25
+
+    def test_normal_trade_not_cancelled(self):
+        line = "13:02:53 BST 50 STB Jul26 Sing Mogas 92 Unl 17.25 @ BLK"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["cancelled"] is False
+
     def test_missing_file_raises(self):
         with pytest.raises(FileNotFoundError):
             parse_image_local("nonexistent_file.png")

@@ -101,6 +101,36 @@ class TestGroupRows:
         trades = group_rows_into_trades(rows)
         assert trades[0]["spread_price"] is None
 
+class TestCancelledTrades:
+
+    def test_cancelled_row_becomes_cancelled_trade(self):
+        rows = [_row("13:00:00 BST", "NEC", 10, "Jul26", 700.0)]
+        rows[0]["cancelled"] = True
+        trades = group_rows_into_trades(rows)
+        assert len(trades) == 1
+        assert trades[0]["trade_type"] == "CANCELLED"
+
+    def test_cancelled_not_mixed_with_active_spread(self):
+        """A cancelled row at the same timestamp as an active leg should not form a spread."""
+        rows = [
+            {**_row("12:00:00 BST", "NEC", 10, "Jul26", 700.0), "cancelled": False},
+            {**_row("12:00:00 BST", "NEC", 10, "Aug26", 690.0), "cancelled": True},
+        ]
+        trades = group_rows_into_trades(rows)
+        types = {t["trade_type"] for t in trades}
+        assert "CANCELLED" in types
+        assert "OUTRIGHT" in types
+        assert "SPREAD" not in types
+
+    def test_active_row_not_affected_by_cancelled_flag(self):
+        rows = [_row("12:00:00 BST", "NEC", 10, "Jul26", 700.0)]
+        rows[0]["cancelled"] = False
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "OUTRIGHT"
+
+
+class TestHubMisc:
+
     def test_hub_carried_through(self):
         rows = [_row("12:00:00 BST", "STB", 25, "Jul26", 17.0,
                      hub="Sing Mogas 92 Unl (Platts)/Brent 1st Line")]
@@ -207,6 +237,7 @@ class TestTapsDetection:
         assert TAPS_CC == {"SMT", "SMU", "SMV", "SMS", "NJC", "NJD", "NJM", "NJB"}
 
     def test_spread_never_taps(self):
+
         rows = [
             _row("09:00:00 BST", "NJC", 5, "Jul26", 0.000),
             _row("09:00:00 BST", "NJC", 5, "Aug26", 0.000),
