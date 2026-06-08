@@ -110,53 +110,68 @@ class TestGroupRows:
 
 class TestTapsDetection:
 
-    # ── SM group: -0.010 to +0.020 ────────────────────────────────────────
+    # ── SM group: exact values -0.020, -0.010, 0.000, +0.010, +0.020 ─────
 
-    def test_smt_at_zero_is_taps(self):
+    def test_smt_zero_is_taps(self):
         rows = [_row("09:29:59 BST", "SMT", 10, "Aug26", 0.000)]
         trades = group_rows_into_trades(rows)
         assert trades[0]["trade_type"] == "TAPS"
         assert "TAPS" in trades[0]["notes"]
 
-    def test_smt_at_lower_bound_is_taps(self):
-        rows = [_row("09:00:00 BST", "SMU", 10, "Aug26", -0.010)]
+    def test_smt_minus_020_is_taps(self):
+        rows = [_row("09:00:00 BST", "SMU", 10, "Aug26", -0.020)]
         trades = group_rows_into_trades(rows)
         assert trades[0]["trade_type"] == "TAPS"
 
-    def test_smt_at_upper_bound_is_taps(self):
-        rows = [_row("09:00:00 BST", "SMV", 10, "Aug26", +0.020)]
+    def test_smt_minus_010_is_taps(self):
+        rows = [_row("09:00:00 BST", "SMV", 10, "Aug26", -0.010)]
         trades = group_rows_into_trades(rows)
         assert trades[0]["trade_type"] == "TAPS"
 
-    def test_smt_above_upper_bound_not_taps(self):
+    def test_smt_plus_010_is_taps(self):
+        rows = [_row("09:00:00 BST", "SMS", 10, "Aug26", +0.010)]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "TAPS"
+
+    def test_smt_plus_020_is_taps(self):
+        rows = [_row("09:00:00 BST", "SMT", 10, "Aug26", +0.020)]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "TAPS"
+
+    def test_smt_non_taps_price_not_taps(self):
         rows = [_row("09:00:00 BST", "SMS", 10, "Aug26", +0.030)]
         trades = group_rows_into_trades(rows)
         assert trades[0]["trade_type"] == "OUTRIGHT"
 
-    def test_smt_below_lower_bound_not_taps(self):
-        rows = [_row("09:00:00 BST", "SMT", 10, "Aug26", -0.020)]
-        trades = group_rows_into_trades(rows)
-        assert trades[0]["trade_type"] == "OUTRIGHT"
+    # ── NJ group: exact values -0.100, -0.050, 0.000, +0.050, +0.100 ─────
 
-    # ── NJ group: -0.100 to +0.100 ────────────────────────────────────────
-
-    def test_njc_at_zero_is_taps(self):
+    def test_njc_zero_is_taps(self):
         rows = [_row("09:00:00 BST", "NJC", 5, "Jul26", 0.000)]
         trades = group_rows_into_trades(rows)
         assert trades[0]["trade_type"] == "TAPS"
 
-    def test_njc_at_lower_bound_is_taps(self):
+    def test_njc_minus_100_is_taps(self):
         rows = [_row("09:00:00 BST", "NJD", 5, "Jul26", -0.100)]
         trades = group_rows_into_trades(rows)
         assert trades[0]["trade_type"] == "TAPS"
 
-    def test_njc_at_upper_bound_is_taps(self):
-        rows = [_row("09:29:59 BST", "NJM", 5, "Jul26", +0.100)]
+    def test_njc_minus_050_is_taps(self):
+        rows = [_row("09:00:00 BST", "NJM", 5, "Jul26", -0.050)]
         trades = group_rows_into_trades(rows)
         assert trades[0]["trade_type"] == "TAPS"
 
-    def test_njc_above_upper_bound_not_taps(self):
-        rows = [_row("09:00:00 BST", "NJB", 5, "Jul26", +0.150)]
+    def test_njc_plus_050_is_taps(self):
+        rows = [_row("09:29:59 BST", "NJB", 5, "Jul26", +0.050)]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "TAPS"
+
+    def test_njc_plus_100_is_taps(self):
+        rows = [_row("09:29:59 BST", "NJC", 5, "Jul26", +0.100)]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "TAPS"
+
+    def test_njc_non_taps_price_not_taps(self):
+        rows = [_row("09:00:00 BST", "NJC", 5, "Jul26", +0.075)]
         trades = group_rows_into_trades(rows)
         assert trades[0]["trade_type"] == "OUTRIGHT"
 

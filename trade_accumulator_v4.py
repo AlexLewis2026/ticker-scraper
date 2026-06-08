@@ -109,18 +109,20 @@ def parse_image_with_claude(image_path: str, api_key: str) -> list[dict]:
 # Outrights for eligible CCs before this time at qualifying price → TAPS
 TAPS_CUTOFF = "09:30:00"
 
-# Per-group price ranges and tick increments
-# SMT/SMU/SMV/SMS : -0.010 to +0.020, tick 0.01
-# NJC/NJD/NJM/NJB : -0.100 to +0.100, tick 0.05
+# Exact prices that trigger TAPS classification, per CC group.
+# Prices are rounded to 3 d.p. before comparison to absorb OCR float noise.
+_SM_TAPS_PRICES = {-0.020, -0.010, 0.000, +0.010, +0.020}
+_NJ_TAPS_PRICES = {-0.100, -0.050, 0.000, +0.050, +0.100}
+
 TAPS_GROUPS = {
-    "SMT": (-0.010, +0.020),
-    "SMU": (-0.010, +0.020),
-    "SMV": (-0.010, +0.020),
-    "SMS": (-0.010, +0.020),
-    "NJC": (-0.100, +0.100),
-    "NJD": (-0.100, +0.100),
-    "NJM": (-0.100, +0.100),
-    "NJB": (-0.100, +0.100),
+    "SMT": _SM_TAPS_PRICES,
+    "SMU": _SM_TAPS_PRICES,
+    "SMV": _SM_TAPS_PRICES,
+    "SMS": _SM_TAPS_PRICES,
+    "NJC": _NJ_TAPS_PRICES,
+    "NJD": _NJ_TAPS_PRICES,
+    "NJM": _NJ_TAPS_PRICES,
+    "NJB": _NJ_TAPS_PRICES,
 }
 TAPS_CC = set(TAPS_GROUPS.keys())
 
@@ -138,9 +140,8 @@ def _classify_trade_type(trade: dict) -> str:
     legs = trade.get("legs", [])
     if not legs:
         return "OUTRIGHT"
-    price = float(legs[0].get("price", 999))
-    lo, hi = TAPS_GROUPS[cc]
-    if lo <= price <= hi:
+    price = round(float(legs[0].get("price", 999)), 3)
+    if price in TAPS_GROUPS[cc]:
         return "TAPS"
     return "OUTRIGHT"
 
