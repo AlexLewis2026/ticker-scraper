@@ -133,7 +133,7 @@ def _classify_trade_type(trade: dict) -> str:
     if cc not in TAPS_GROUPS:
         return "OUTRIGHT"
     time_part = trade.get("timestamp", "").split()[0]   # "HH:MM:SS"
-    if time_part >= TAPS_CUTOFF:
+    if time_part > TAPS_CUTOFF:
         return "OUTRIGHT"
     legs = trade.get("legs", [])
     if not legs:

@@ -167,13 +167,14 @@ class TestTapsDetection:
 
     # ── Time and CC boundary conditions ───────────────────────────────────
 
-    def test_not_taps_at_cutoff_time(self):
+    def test_taps_at_cutoff_time(self):
+        """09:30:00 exactly is included."""
         rows = [_row("09:30:00 BST", "NJC", 5, "Jul26", 0.000)]
         trades = group_rows_into_trades(rows)
-        assert trades[0]["trade_type"] == "OUTRIGHT"
+        assert trades[0]["trade_type"] == "TAPS"
 
     def test_not_taps_after_cutoff(self):
-        rows = [_row("09:45:00 BST", "SMT", 5, "Jul26", 0.000)]
+        rows = [_row("09:30:01 BST", "NJC", 5, "Jul26", 0.000)]
         trades = group_rows_into_trades(rows)
         assert trades[0]["trade_type"] == "OUTRIGHT"
 
