@@ -106,19 +106,31 @@ def parse_image_with_claude(image_path: str, api_key: str) -> list[dict]:
 #  TAPS / MOC DETECTION
 # ═══════════════════════════════════════════════════════════════════════════
 
-# CC codes eligible for TAPS classification
-TAPS_CC = {"SMT", "SMU", "SMV", "SMS", "NJC", "NJD", "NJM", "NJB"}
+# Outrights for eligible CCs before this time at qualifying price → TAPS
+TAPS_CUTOFF = "09:45:00"
 
-# Outrights for eligible CCs before this time at near-zero price → TAPS
-TAPS_CUTOFF  = "09:45:00"
-TAPS_MAX_ABS = 0.002   # captures -0.001, 0.000, +0.001
+# Per-group price ranges and tick increments
+# SMT/SMU/SMV/SMS : -0.010 to +0.020, tick 0.01
+# NJC/NJD/NJM/NJB : -0.100 to +0.100, tick 0.05
+TAPS_GROUPS = {
+    "SMT": (-0.010, +0.020),
+    "SMU": (-0.010, +0.020),
+    "SMV": (-0.010, +0.020),
+    "SMS": (-0.010, +0.020),
+    "NJC": (-0.100, +0.100),
+    "NJD": (-0.100, +0.100),
+    "NJM": (-0.100, +0.100),
+    "NJB": (-0.100, +0.100),
+}
+TAPS_CC = set(TAPS_GROUPS.keys())
 
 
 def _classify_trade_type(trade: dict) -> str:
     """Return 'TAPS' if the trade meets MOC/TAPS criteria, else the original type."""
     if trade.get("trade_type") != "OUTRIGHT":
         return trade["trade_type"]
-    if trade.get("cc", "") not in TAPS_CC:
+    cc = trade.get("cc", "")
+    if cc not in TAPS_GROUPS:
         return "OUTRIGHT"
     time_part = trade.get("timestamp", "").split()[0]   # "HH:MM:SS"
     if time_part >= TAPS_CUTOFF:
@@ -126,7 +138,9 @@ def _classify_trade_type(trade: dict) -> str:
     legs = trade.get("legs", [])
     if not legs:
         return "OUTRIGHT"
-    if abs(float(legs[0].get("price", 999))) <= TAPS_MAX_ABS:
+    price = float(legs[0].get("price", 999))
+    lo, hi = TAPS_GROUPS[cc]
+    if lo <= price <= hi:
         return "TAPS"
     return "OUTRIGHT"
 

@@ -110,24 +110,70 @@ class TestGroupRows:
 
 class TestTapsDetection:
 
-    def test_taps_eligible_cc_before_cutoff_near_zero_price(self):
-        rows = [_row("09:30:00 BST", "NJC", 5, "Jul26", 0.000)]
+    # ── SM group: -0.010 to +0.020 ────────────────────────────────────────
+
+    def test_smt_at_zero_is_taps(self):
+        rows = [_row("09:30:00 BST", "SMT", 10, "Aug26", 0.000)]
         trades = group_rows_into_trades(rows)
         assert trades[0]["trade_type"] == "TAPS"
         assert "TAPS" in trades[0]["notes"]
 
-    def test_taps_negative_price(self):
-        rows = [_row("09:00:00 BST", "SMT", 10, "Aug26", -0.001)]
+    def test_smt_at_lower_bound_is_taps(self):
+        rows = [_row("09:00:00 BST", "SMU", 10, "Aug26", -0.010)]
         trades = group_rows_into_trades(rows)
         assert trades[0]["trade_type"] == "TAPS"
 
-    def test_taps_positive_price(self):
-        rows = [_row("09:44:59 BST", "NJD", 5, "Jul26", 0.001)]
+    def test_smt_at_upper_bound_is_taps(self):
+        rows = [_row("09:00:00 BST", "SMV", 10, "Aug26", +0.020)]
         trades = group_rows_into_trades(rows)
         assert trades[0]["trade_type"] == "TAPS"
+
+    def test_smt_above_upper_bound_not_taps(self):
+        rows = [_row("09:00:00 BST", "SMS", 10, "Aug26", +0.030)]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "OUTRIGHT"
+
+    def test_smt_below_lower_bound_not_taps(self):
+        rows = [_row("09:00:00 BST", "SMT", 10, "Aug26", -0.020)]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "OUTRIGHT"
+
+    # ── NJ group: -0.100 to +0.100 ────────────────────────────────────────
+
+    def test_njc_at_zero_is_taps(self):
+        rows = [_row("09:00:00 BST", "NJC", 5, "Jul26", 0.000)]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "TAPS"
+
+    def test_njc_at_lower_bound_is_taps(self):
+        rows = [_row("09:00:00 BST", "NJD", 5, "Jul26", -0.100)]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "TAPS"
+
+    def test_njc_at_upper_bound_is_taps(self):
+        rows = [_row("09:44:59 BST", "NJM", 5, "Jul26", +0.100)]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "TAPS"
+
+    def test_njc_above_upper_bound_not_taps(self):
+        rows = [_row("09:00:00 BST", "NJB", 5, "Jul26", +0.150)]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "OUTRIGHT"
+
+    def test_njc_flat_price_not_taps(self):
+        rows = [_row("09:00:00 BST", "NJC", 5, "Jul26", 700.0)]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "OUTRIGHT"
+
+    # ── Time and CC boundary conditions ───────────────────────────────────
+
+    def test_not_taps_at_cutoff_time(self):
+        rows = [_row("09:45:00 BST", "NJC", 5, "Jul26", 0.000)]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "OUTRIGHT"
 
     def test_not_taps_after_cutoff(self):
-        rows = [_row("09:45:00 BST", "NJC", 5, "Jul26", 0.000)]
+        rows = [_row("10:00:00 BST", "SMT", 5, "Jul26", 0.000)]
         trades = group_rows_into_trades(rows)
         assert trades[0]["trade_type"] == "OUTRIGHT"
 
@@ -136,16 +182,10 @@ class TestTapsDetection:
         trades = group_rows_into_trades(rows)
         assert trades[0]["trade_type"] == "OUTRIGHT"
 
-    def test_not_taps_large_price(self):
-        rows = [_row("09:00:00 BST", "NJC", 5, "Jul26", 700.0)]
-        trades = group_rows_into_trades(rows)
-        assert trades[0]["trade_type"] == "OUTRIGHT"
+    def test_taps_cc_set_correct(self):
+        assert TAPS_CC == {"SMT", "SMU", "SMV", "SMS", "NJC", "NJD", "NJM", "NJB"}
 
-    def test_taps_cc_set_contains_expected_codes(self):
-        expected = {"SMT", "SMU", "SMV", "SMS", "NJC", "NJD", "NJM", "NJB"}
-        assert expected == TAPS_CC
-
-    def test_spread_never_classified_as_taps(self):
+    def test_spread_never_taps(self):
         rows = [
             _row("09:00:00 BST", "NJC", 5, "Jul26", 0.000),
             _row("09:00:00 BST", "NJC", 5, "Aug26", 0.000),
