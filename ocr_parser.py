@@ -133,9 +133,18 @@ def _parse_line(line: str) -> dict | None:
 
     sm = QTY_STUCK_RE.match(first)
     if sm:
-        qty_str      = sm.group(1)
-        strip_tokens = [sm.group(2)]
-        tokens       = tokens[1:]
+        qty_str   = sm.group(1)
+        remainder = sm.group(2)
+        # If the stuck remainder is a CC code (all uppercase, no digits)
+        # treat it as CC rather than the first strip word.
+        # e.g. "5NJC" → qty=5, cc="NJC"
+        # e.g. "4Bal" → qty=4, strip_first="Bal"
+        if CC_PATTERN.match(remainder):
+            cc           = remainder
+            strip_tokens = []
+        else:
+            strip_tokens = [remainder]
+        tokens = tokens[1:]
     else:
         if not first.isdigit():
             return None

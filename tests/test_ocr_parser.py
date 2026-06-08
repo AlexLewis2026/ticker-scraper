@@ -151,6 +151,32 @@ class TestParseLine:
         assert row["cc"]    == "STB"
         assert row["strip"] == "Jul26"
 
+    def test_stuck_qty_and_cc(self):
+        """OCR merges qty+CC into one token, e.g. '5NJC' — CC must be extracted."""
+        line = "09:15:00 BST 5NJC Jul26 Far East 0.000 © BLK"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["qty"]   == 5
+        assert row["cc"]    == "NJC"
+        assert row["strip"] == "Jul26"
+
+    def test_stuck_qty_and_cc_with_quarter(self):
+        line = "09:28:00 BST 5NJD Q3 26 Far East -0.050 © BLK"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["qty"]   == 5
+        assert row["cc"]    == "NJD"
+        assert row["strip"] == "Q3 26"
+
+    def test_stuck_qty_and_strip_word_still_works(self):
+        """'4Bal' — lowercase means it's a strip word, not a CC."""
+        line = "13:00:40 BST 4Bal Month Naphtha CIF NWE Cg 712.50 © BLK"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["qty"]   == 4
+        assert row["cc"]    == ""
+        assert row["strip"] == "Bal Month"
+
     def test_new_format_quarter_strip(self):
         """New format: Q not misread into qty."""
         line = "09:00:00 BST 5 NJC Q4 26 Far East 0.000 © BLK"
