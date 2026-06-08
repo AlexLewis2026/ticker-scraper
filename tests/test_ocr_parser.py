@@ -1,7 +1,7 @@
 """Tests for ocr_parser._parse_line and parse_image_local."""
 
 import pytest
-from ocr_parser import _parse_line, _is_strip_token, parse_image_local
+from ocr_parser import _parse_line, _is_strip_token, _join_wrapped_lines, parse_image_local
 
 
 # ── _is_strip_token ───────────────────────────────────────────────────────────
@@ -41,6 +41,51 @@ class TestIsStripToken:
 
 
 # ── _parse_line ────────────────────────────────────────────────────────────────
+
+class TestJoinWrappedLines:
+
+    def test_single_line_unchanged(self):
+        text = "14:25:58 BST 10 SMT Jul26 Sing Mogas 111.20 © BLK"
+        assert _join_wrapped_lines(text) == [text]
+
+    def test_wrapped_hub_rejoined(self):
+        text = "14:25:58 BST 10 SMT Jul26 Sing Mogas 92\nUnl (Platts) 111.20 © BLK"
+        lines = _join_wrapped_lines(text)
+        assert len(lines) == 1
+        assert "Sing Mogas 92 Unl (Platts)" in lines[0]
+
+    def test_multiple_rows_stay_separate(self):
+        text = (
+            "14:25:58 BST 10 SMT Jul26 Sing Mogas 111.20 © BLK\n"
+            "14:26:00 BST 5 NEC Aug26 Naphtha CIF 700.00 © BLK"
+        )
+        lines = _join_wrapped_lines(text)
+        assert len(lines) == 2
+
+    def test_multi_line_wrap_rejoined(self):
+        """Three OCR lines for one trade row."""
+        text = "14:25:58 BST 10 SMT Jul26 Sing Mogas 92\nUnl (Platts)/Brent\n1st Line 111.20 © BLK"
+        lines = _join_wrapped_lines(text)
+        assert len(lines) == 1
+        assert lines[0].startswith("14:25:58")
+
+    def test_blank_lines_ignored(self):
+        text = "14:25:58 BST 10 SMT Jul26 Sing 111.20 © BLK\n\n14:26:00 BST 5 NEC Aug26 Naphtha 700.00 © BLK"
+        lines = _join_wrapped_lines(text)
+        assert len(lines) == 2
+
+    def test_wrapped_line_fully_parses(self):
+        """End-to-end: a wrapped row should parse correctly after joining."""
+        text = "14:25:58 BST 10 SMT Jul26 Sing Mogas 92\nUnl (Platts)/Brent 1st Line 111.20 © BLK"
+        lines = _join_wrapped_lines(text)
+        assert len(lines) == 1
+        row = _parse_line(lines[0])
+        assert row is not None
+        assert row["cc"]    == "SMT"
+        assert row["qty"]   == 10
+        assert row["strip"] == "Jul26"
+        assert row["price"] == 111.20
+
 
 class TestParseLine:
 

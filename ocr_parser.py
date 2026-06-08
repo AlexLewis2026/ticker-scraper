@@ -253,6 +253,32 @@ def _parse_line(line: str) -> dict | None:
 
 # ── public entry point ─────────────────────────────────────────────────────────
 
+def _join_wrapped_lines(text: str) -> list[str]:
+    """
+    Tesseract sometimes splits a single blotter row across two lines when the
+    hub name is long.  Any line that does NOT begin with a timestamp is a
+    continuation of the previous line — join it back on.
+    """
+    joined: list[str] = []
+    current = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            if current:
+                joined.append(current)
+                current = ""
+            continue
+        if TS_RE.match(line):          # new trade row starts
+            if current:
+                joined.append(current)
+            current = line
+        else:                          # continuation — append to current row
+            current = (current + " " + line).strip() if current else line
+    if current:
+        joined.append(current)
+    return joined
+
+
 def parse_image_local(image_path: str) -> list[dict]:
     """
     Drop-in replacement for parse_image_with_claude().
@@ -260,7 +286,7 @@ def parse_image_local(image_path: str) -> list[dict]:
     Raises FileNotFoundError, ValueError, or RuntimeError on hard failures.
     """
     raw_text = _ocr_image(image_path)
-    rows = [r for line in raw_text.splitlines() if (r := _parse_line(line))]
+    rows = [r for line in _join_wrapped_lines(raw_text) if (r := _parse_line(line))]
     if not rows:
         preview = "\n".join(raw_text.splitlines()[:8]) or "(empty)"
         raise ValueError(
