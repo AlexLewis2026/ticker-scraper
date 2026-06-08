@@ -209,6 +209,7 @@ HTML = r"""
   .badge { font-size: 11px; font-weight: bold; border-radius: 4px; padding: 2px 7px; }
   .badge-outright { background: #21262d; color: #e6edf3; }
   .badge-spread   { background: #3d2b00; color: #f0b429; }
+  .badge-taps     { background: #0d2b3e; color: #58a6ff; }
   .badge-flag     { background: #490202; color: #f85149; }
 
   .trade-card-body {
@@ -341,6 +342,7 @@ HTML = r"""
   tbody tr:nth-child(even) { background: #161b22; }
   tbody tr:nth-child(odd)  { background: #0d1117; }
   tbody tr.spread { background: #2b2000; }
+  tbody tr.taps   { background: #0d1f2e; }
   tbody tr.flag   { background: #2b0000; }
   tbody td { padding: 5px 10px; white-space: nowrap; }
   .num { text-align: right; font-family: monospace; }
@@ -638,7 +640,8 @@ function renderTrades(trades) {
   trades.forEach(t => {
     const isFlag   = t.notes && t.notes.includes('⚠');
     const isSpread = t.trade_type === 'SPREAD';
-    const badgeCls = isFlag ? 'badge-flag' : isSpread ? 'badge-spread' : 'badge-outright';
+    const isTaps   = t.trade_type === 'TAPS';
+    const badgeCls = isFlag ? 'badge-flag' : isSpread ? 'badge-spread' : isTaps ? 'badge-taps' : 'badge-outright';
     const badgeLbl = isFlag ? '⚠ ' + t.trade_type : t.trade_type;
     const fields   = [
       ['Timestamp', t.timestamp], ['CC', t.cc], ['Qty', t.qty], ['Hub', t.hub || '—'],
@@ -804,7 +807,7 @@ function renderLog(rows) {
     <table>
       <thead><tr>${cols.map(c=>`<th>${c}</th>`).join('')}</tr></thead>
       <tbody>${rows.map(r => {
-        const cls = (r[2]&&r[2].includes('⚠')) ? 'flag' : r[1]==='SPREAD' ? 'spread' : '';
+        const cls = (r[2]&&r[2].includes('⚠')) ? 'flag' : r[1]==='SPREAD' ? 'spread' : r[1]==='TAPS' ? 'taps' : '';
         return `<tr class="${cls}">${r.map((v,i)=>`<td class="${numCols.has(i)?'num':''}">${v??''}</td>`).join('')}</tr>`;
       }).join('')}</tbody>
     </table>`;
@@ -957,9 +960,9 @@ def _compute_tally():
         ts   = t.get("timestamp", "")
         sp   = t.get("spread_price")
 
-        if tt == "OUTRIGHT" and legs:
+        if tt in ("OUTRIGHT", "TAPS") and legs:
             l = legs[0]
-            buckets[(cc, l["strip"], "OUTRIGHT")].append(
+            buckets[(cc, l["strip"], tt)].append(
                 {"ts": ts, "qty": qty, "price": float(l["price"])})
         elif tt == "SPREAD" and sp is not None:
             # One entry per spread trade using the differential price.
@@ -971,8 +974,8 @@ def _compute_tally():
     for k in buckets:
         buckets[k].sort(key=lambda x: x["ts"])
 
-    KIND_ORDER = {"OUTRIGHT": 0, "SPREAD": 1}
-    KIND_LABEL = {"OUTRIGHT": "Outright", "SPREAD": "Spread"}
+    KIND_ORDER = {"OUTRIGHT": 0, "TAPS": 1, "SPREAD": 2}
+    KIND_LABEL = {"OUTRIGHT": "Outright", "TAPS": "TAPS / MOC", "SPREAD": "Spread"}
     sorted_keys = sorted(buckets, key=lambda k: (k[0], KIND_ORDER.get(k[2], 9), k[1]))
 
     cc_groups = {}

@@ -142,6 +142,31 @@ class TestParseLine:
         assert row["qty"]   == 1
         assert row["strip"] == "Q3 26"
 
+    def test_new_format_qty_before_cc(self):
+        """New screenshot format: Qty comes before CC."""
+        line = "13:02:53 BST 50 STB Jul26 Sing Mogas 92 Unl 17.25 @ BLK"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["qty"]   == 50
+        assert row["cc"]    == "STB"
+        assert row["strip"] == "Jul26"
+
+    def test_new_format_quarter_strip(self):
+        """New format: Q not misread into qty."""
+        line = "09:00:00 BST 5 NJC Q4 26 Far East 0.000 © BLK"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["qty"]   == 5
+        assert row["cc"]    == "NJC"
+        assert row["strip"] == "Q4 26"
+
+    def test_new_format_no_cc(self):
+        line = "13:03:21 BST 25 Jul26 Sing Mogas 92 Unl 17.25 @ BLK"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["qty"]   == 25
+        assert row["cc"]    == ""
+
     def test_gmt_timezone(self):
         line = "13:02:53 GMT STB 50 Jul26 Sing Mogas 92 Unl 17.25 @ BLK"
         row = _parse_line(line)

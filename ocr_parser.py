@@ -115,17 +115,22 @@ def _parse_line(line: str) -> dict | None:
     if not tokens:
         return None
 
-    # 3. Optional CC: leading 2-5 uppercase token
+    # 3 & 4. Extract CC and Qty — supports both column orders:
+    #   Old format:  CC  Qty  Strip  Hub   (e.g. "STB 50 Jul26 Sing…")
+    #   New format:  Qty CC   Strip  Hub   (e.g. "50 STB Jul26 Sing…")
     cc = ""
+
     if CC_PATTERN.match(tokens[0]):
-        cc = tokens[0]
+        # Old format: CC leads
+        cc     = tokens[0]
         tokens = tokens[1:]
+        if not tokens:
+            return None
+        first = tokens[0]
+    else:
+        # New format: Qty leads
+        first = tokens[0]
 
-    if not tokens:
-        return None
-
-    # 4. Qty: first token (may be fused to strip word, e.g. "4Bal")
-    first = tokens[0]
     sm = QTY_STUCK_RE.match(first)
     if sm:
         qty_str      = sm.group(1)
@@ -142,6 +147,11 @@ def _parse_line(line: str) -> dict | None:
         qty = int(qty_str)
     except ValueError:
         return None
+
+    # After qty, pick up CC if not already found (new format: Qty CC Strip)
+    if not cc and tokens and CC_PATTERN.match(tokens[0]):
+        cc     = tokens[0]
+        tokens = tokens[1:]
 
     # 5. Strip: consume tokens that match strip patterns.
     #    Everything after the strip is the hub.

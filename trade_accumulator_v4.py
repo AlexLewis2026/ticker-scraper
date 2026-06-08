@@ -103,6 +103,35 @@ def parse_image_with_claude(image_path: str, api_key: str) -> list[dict]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  TAPS / MOC DETECTION
+# ═══════════════════════════════════════════════════════════════════════════
+
+# CC codes eligible for TAPS classification
+TAPS_CC = {"SMT", "SMU", "SMV", "SMS", "NJC", "NJD", "NJM", "NJB"}
+
+# Outrights for eligible CCs before this time at near-zero price → TAPS
+TAPS_CUTOFF  = "09:45:00"
+TAPS_MAX_ABS = 0.002   # captures -0.001, 0.000, +0.001
+
+
+def _classify_trade_type(trade: dict) -> str:
+    """Return 'TAPS' if the trade meets MOC/TAPS criteria, else the original type."""
+    if trade.get("trade_type") != "OUTRIGHT":
+        return trade["trade_type"]
+    if trade.get("cc", "") not in TAPS_CC:
+        return "OUTRIGHT"
+    time_part = trade.get("timestamp", "").split()[0]   # "HH:MM:SS"
+    if time_part >= TAPS_CUTOFF:
+        return "OUTRIGHT"
+    legs = trade.get("legs", [])
+    if not legs:
+        return "OUTRIGHT"
+    if abs(float(legs[0].get("price", 999))) <= TAPS_MAX_ABS:
+        return "TAPS"
+    return "OUTRIGHT"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  TRADE GROUPING — same-product only
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -140,10 +169,10 @@ def group_rows_into_trades(raw_rows: list[dict]) -> list[dict]:
             if len(leg_rows) == 0:
                 continue
 
-            # ── Single leg → outright ──────────────────────────────────────
+            # ── Single leg → outright (or TAPS if criteria met) ───────────
             if len(leg_rows) == 1:
                 lr = leg_rows[0]
-                trades.append({
+                t = {
                     "timestamp":    ts,
                     "trade_type":   "OUTRIGHT",
                     "notes":        "",
@@ -152,7 +181,11 @@ def group_rows_into_trades(raw_rows: list[dict]) -> list[dict]:
                     "hub":          lr["hub"],
                     "spread_price": None,
                     "legs": [{"strip": lr["strip"], "price": lr["price"]}],
-                })
+                }
+                t["trade_type"] = _classify_trade_type(t)
+                if t["trade_type"] == "TAPS":
+                    t["notes"] = "TAPS/MOC"
+                trades.append(t)
 
             else:
                 qtys = [r["qty"] for r in leg_rows]
@@ -429,9 +462,9 @@ def _rebuild_tally(wb):
     for t in all_trades:
         cc, qty, legs, tt = t["cc"], t["qty"], t["legs"], t["tt"]
 
-        if tt == "OUTRIGHT" and legs:
+        if tt in ("OUTRIGHT", "TAPS") and legs:
             l = legs[0]
-            buckets[(cc, l["strip"], "OUTRIGHT")].append(
+            buckets[(cc, l["strip"], tt)].append(
                 {"ts": t["ts"], "qty": qty, "price": l["price"]})
 
         elif tt == "SPREAD" and t["sp"] is not None:
@@ -446,7 +479,7 @@ def _rebuild_tally(wb):
         buckets[k].sort(key=lambda x: x["ts"])
 
     # ── Sort keys: CC → kind order → strip label ──────────────────────────
-    KIND_ORDER = {"OUTRIGHT": 0, "SPREAD": 1}
+    KIND_ORDER = {"OUTRIGHT": 0, "TAPS": 1, "SPREAD": 2}
     sorted_keys = sorted(
         buckets.keys(),
         key=lambda k: (k[0], KIND_ORDER.get(k[2], 9), k[1])
@@ -467,7 +500,7 @@ def _rebuild_tally(wb):
     for key in sorted_keys:
         cc_key, strip_label, kind = key
         recs      = buckets[key]
-        trade_fill = F_SPREAD if kind == "SPREAD" else F_OUT
+        trade_fill = F_SPREAD if kind == "SPREAD" else F_FLAG if kind == "TAPS" else F_OUT
 
         # CC banner (new CC)
         if cc_key != prev_cc:
@@ -485,7 +518,7 @@ def _rebuild_tally(wb):
             prev_cc = cc_key
 
         # Block sub-header
-        kind_label = {"OUTRIGHT": "Outright", "SPREAD": "Spread"}[kind]
+        kind_label = {"OUTRIGHT": "Outright", "TAPS": "TAPS / MOC", "SPREAD": "Spread"}[kind]
         block_title = f"{strip_label}  [{kind_label}]"
 
         for ci in range(1, 7):

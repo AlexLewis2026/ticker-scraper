@@ -1,7 +1,7 @@
 """Tests for trade_accumulator_v4.group_rows_into_trades."""
 
 import pytest
-from trade_accumulator_v4 import group_rows_into_trades
+from trade_accumulator_v4 import group_rows_into_trades, TAPS_CC
 
 
 def _row(ts, cc, qty, strip, price, is_diff=False, hub="Naphtha CIF NWE Cg"):
@@ -106,3 +106,49 @@ class TestGroupRows:
                      hub="Sing Mogas 92 Unl (Platts)/Brent 1st Line")]
         trades = group_rows_into_trades(rows)
         assert trades[0]["hub"] == "Sing Mogas 92 Unl (Platts)/Brent 1st Line"
+
+
+class TestTapsDetection:
+
+    def test_taps_eligible_cc_before_cutoff_near_zero_price(self):
+        rows = [_row("09:30:00 BST", "NJC", 5, "Jul26", 0.000)]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "TAPS"
+        assert "TAPS" in trades[0]["notes"]
+
+    def test_taps_negative_price(self):
+        rows = [_row("09:00:00 BST", "SMT", 10, "Aug26", -0.001)]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "TAPS"
+
+    def test_taps_positive_price(self):
+        rows = [_row("09:44:59 BST", "NJD", 5, "Jul26", 0.001)]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "TAPS"
+
+    def test_not_taps_after_cutoff(self):
+        rows = [_row("09:45:00 BST", "NJC", 5, "Jul26", 0.000)]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "OUTRIGHT"
+
+    def test_not_taps_wrong_cc(self):
+        rows = [_row("09:00:00 BST", "NEC", 5, "Jul26", 0.000)]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "OUTRIGHT"
+
+    def test_not_taps_large_price(self):
+        rows = [_row("09:00:00 BST", "NJC", 5, "Jul26", 700.0)]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "OUTRIGHT"
+
+    def test_taps_cc_set_contains_expected_codes(self):
+        expected = {"SMT", "SMU", "SMV", "SMS", "NJC", "NJD", "NJM", "NJB"}
+        assert expected == TAPS_CC
+
+    def test_spread_never_classified_as_taps(self):
+        rows = [
+            _row("09:00:00 BST", "NJC", 5, "Jul26", 0.000),
+            _row("09:00:00 BST", "NJC", 5, "Aug26", 0.000),
+        ]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "SPREAD"
