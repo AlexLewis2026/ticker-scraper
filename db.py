@@ -248,15 +248,16 @@ def reset_day(excel_path: Path,
               archive_dir: Path | None = None):
     """
     Archive today's Excel file and wipe the DB + screenshots.
+    Clears DB tables in-place (avoids Windows file-lock issues with WAL mode).
     Safe to call even if files don't exist.
     """
     from datetime import date
 
     archive = archive_dir or ARCHIVE_DIR
     shots   = screenshots_dir or SCREENSHOTS_DIR
-    db      = db_path or DB_PATH
 
     archive.mkdir(parents=True, exist_ok=True)
+    shots.mkdir(parents=True, exist_ok=True)
 
     # Archive Excel with the date it covers (last import date or today)
     trade_date = get_last_import_date(db_path) or str(date.today())
@@ -266,17 +267,25 @@ def reset_day(excel_path: Path,
         excel_path.unlink()
 
     # Wipe screenshots
-    if shots.exists():
-        for f in shots.iterdir():
-            f.unlink(missing_ok=True)
+    for f in shots.iterdir():
+        try:
+            f.unlink()
+        except OSError:
+            pass
 
-    # Wipe DB
-    for suffix in ("", "-shm", "-wal"):
-        p = db.parent / (db.name + suffix)
-        p.unlink(missing_ok=True)
+    # Clear DB tables in-place — avoids deleting the file while it may be
+    # locked by SQLite's WAL mode on Windows
+    with _connect(db_path) as con:
+        con.execute("DELETE FROM trades")
+        con.execute("DELETE FROM raw_rows")
+        con.execute("DELETE FROM imports")
+        con.execute("DELETE FROM sqlite_sequence WHERE name IN ('imports','raw_rows','trades')")
 
-    # Re-initialise fresh DB
-    init_db(db_path=db, screenshots_dir=shots)
+    # VACUUM must run outside a transaction
+    con2 = _connect(db_path)
+    con2.isolation_level = None
+    con2.execute("VACUUM")
+    con2.close()
 
 
 def get_all_trades(db_path: Path | None = None) -> list[dict]:
