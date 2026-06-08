@@ -25,7 +25,7 @@ PRICE_RE = re.compile(
     r"(-?\d+(?:\.\d+)?)"       # price
     r"\s+\S*\s*"               # optional bullet / junk char
     r"([A-Za-z]{2,})"         # TT code: BLK, cancelled, etc.
-    r"\s*$",
+    r"[^A-Za-z\d]*$",          # allow any trailing punctuation/symbols (`, ', etc.)
     re.IGNORECASE
 )
 
