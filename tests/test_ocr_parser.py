@@ -169,12 +169,13 @@ class TestParseLine:
         assert row["strip"] == "Q3 26"
 
     def test_stuck_qty_and_strip_word_still_works(self):
-        """'4Bal' — lowercase means it's a strip word, not a CC."""
+        """'4Bal' — lowercase means it's a strip word, not a CC.
+        CC is blank in the column but filled from hub lookup (Naphtha → NEC)."""
         line = "13:00:40 BST 4Bal Month Naphtha CIF NWE Cg 712.50 © BLK"
         row = _parse_line(line)
         assert row is not None
         assert row["qty"]   == 4
-        assert row["cc"]    == ""
+        assert row["cc"]    == "NEC"   # filled via hub lookup
         assert row["strip"] == "Bal Month"
 
     def test_new_format_quarter_strip(self):
@@ -241,6 +242,36 @@ class TestParseLine:
 # ── parse_image_local ─────────────────────────────────────────────────────────
 
 class TestParseImageLocal:
+
+    def test_hub_fills_blank_cc_far_east(self):
+        """Bal Month outright where CC column is blank — hub resolves it."""
+        line = "09:37:09 BST 4 Bal Month Far East 775.00 © BLK"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["cc"]    == "AFE"
+        assert row["strip"] == "Bal Month"
+
+    def test_hub_fills_blank_cc_spread_diff(self):
+        """Spread diff row with blank CC and joined hub — first hub segment used."""
+        line = "13:00:40 BST 4Bal Month/Jul26 =Naphtha CIF NWE Cg/Naphtha CIF NWE Cg 11.50 © BLK"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["cc"]    == "NEC"
+        assert row["strip"] == "Bal Month/Jul26"
+
+    def test_hub_does_not_override_existing_cc(self):
+        """If CC is already present, hub lookup is not applied."""
+        line = "13:00:40 BST NEH 4Bal Month Naphtha CIF NWE Cg 712.50 © BLK"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["cc"] == "NEH"
+
+    def test_hub_unknown_leaves_cc_blank(self):
+        """Hub not in the map → CC stays empty."""
+        line = "13:00:00 BST 5 Jul26 Unknown Hub XYZ 700.00 © BLK"
+        row = _parse_line(line)
+        if row:
+            assert row["cc"] == ""
 
     def test_cancelled_trade_flagged(self):
         line = "13:02:53 BST 50 STB Jul26 Sing Mogas 92 Unl 17.25 © cancelled"

@@ -48,6 +48,48 @@ _STRIP_TOKEN_RE = re.compile(
 )
 
 
+# ── Hub → CC fallback map ──────────────────────────────────────────────────────
+# Used when the CC column is blank in the blotter (common on Bal Month and
+# spread-diff rows).  Key = canonical hub name (lowercase for matching).
+# Add new entries here whenever a new hub/CC pair is encountered.
+HUB_CC_MAP: dict[str, str] = {
+    # Naphtha CIF NWE
+    "naphtha cif nwe cg":                                   "NEC",
+    "naphtha cif nwe cg mini":                              "NAM",
+    # Naphtha C&F Japan
+    "naphtha c&f japan cg":                                 "NJC",
+    # Sing Mogas
+    "sing mogas 92 unl (platts)/brent 1st line":            "STB",
+    # Far East (naphtha)
+    "far east":                                             "AFE",
+    # Saudi CP
+    "saudi cp":                                             "SCP",
+    # Argus Eurobob
+    "argus eurobob oxy fob rdam bg":                        "AEO",
+    "argus eurobob oxy fob rdam bg mini":                   "AOM",
+    # MT B-ETR / MT B-ENT (propane)
+    "mt b-etr":                                             "PRL",
+    "mt b-ent":                                             "PRN",
+    # Conway
+    "conway":                                               "PRC",
+    # Far East / CIF ARA (EGD)
+    "far east/cif ara":                                     "EGD",
+}
+
+
+def _hub_to_cc(hub: str) -> str:
+    """
+    Derive a CC from a hub string when the CC column was blank.
+    Strips OCR junk and takes the first segment before '/' so that
+    spread-diff hubs like 'Far East/Far East' resolve correctly.
+    """
+    # Clean OCR junk from the start
+    clean = hub.lstrip("=©®@•~-_ ").strip()
+    # Take only the first hub segment (spread diffs have "Hub1/Hub2")
+    first = clean.split("/")[0].strip().lower()
+    return HUB_CC_MAP.get(first, "")
+
+
 def _is_strip_token(tok: str) -> bool:
     """Return True if this token is part of a strip/spread designation."""
     # Also accept tokens that contain a slash and end with 2-digit year
@@ -190,7 +232,11 @@ def _parse_line(line: str) -> dict | None:
 
     hub = " ".join(tokens[hub_start:]).strip()
 
-    # 6. Diff row: strip contains "/" and price is small (spread differential)
+    # 6. Fill blank CC from hub when the blotter omits it (e.g. Bal Month rows)
+    if not cc and hub:
+        cc = _hub_to_cc(hub)
+
+    # 7. Diff row: strip contains "/" and price is small (spread differential)
     is_diff = "/" in strip and abs(price) < 100
 
     return {
