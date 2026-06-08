@@ -113,7 +113,7 @@ class TestTapsDetection:
     # ── SM group: -0.010 to +0.020 ────────────────────────────────────────
 
     def test_smt_at_zero_is_taps(self):
-        rows = [_row("09:30:00 BST", "SMT", 10, "Aug26", 0.000)]
+        rows = [_row("09:29:59 BST", "SMT", 10, "Aug26", 0.000)]
         trades = group_rows_into_trades(rows)
         assert trades[0]["trade_type"] == "TAPS"
         assert "TAPS" in trades[0]["notes"]
@@ -151,7 +151,7 @@ class TestTapsDetection:
         assert trades[0]["trade_type"] == "TAPS"
 
     def test_njc_at_upper_bound_is_taps(self):
-        rows = [_row("09:44:59 BST", "NJM", 5, "Jul26", +0.100)]
+        rows = [_row("09:29:59 BST", "NJM", 5, "Jul26", +0.100)]
         trades = group_rows_into_trades(rows)
         assert trades[0]["trade_type"] == "TAPS"
 
@@ -168,14 +168,19 @@ class TestTapsDetection:
     # ── Time and CC boundary conditions ───────────────────────────────────
 
     def test_not_taps_at_cutoff_time(self):
-        rows = [_row("09:45:00 BST", "NJC", 5, "Jul26", 0.000)]
+        rows = [_row("09:30:00 BST", "NJC", 5, "Jul26", 0.000)]
         trades = group_rows_into_trades(rows)
         assert trades[0]["trade_type"] == "OUTRIGHT"
 
     def test_not_taps_after_cutoff(self):
-        rows = [_row("10:00:00 BST", "SMT", 5, "Jul26", 0.000)]
+        rows = [_row("09:45:00 BST", "SMT", 5, "Jul26", 0.000)]
         trades = group_rows_into_trades(rows)
         assert trades[0]["trade_type"] == "OUTRIGHT"
+
+    def test_just_before_cutoff_is_taps(self):
+        rows = [_row("09:29:59 BST", "NJC", 5, "Jul26", 0.000)]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "TAPS"
 
     def test_not_taps_wrong_cc(self):
         rows = [_row("09:00:00 BST", "NEC", 5, "Jul26", 0.000)]

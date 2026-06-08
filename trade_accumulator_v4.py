@@ -107,7 +107,7 @@ def parse_image_with_claude(image_path: str, api_key: str) -> list[dict]:
 # ═══════════════════════════════════════════════════════════════════════════
 
 # Outrights for eligible CCs before this time at qualifying price → TAPS
-TAPS_CUTOFF = "09:45:00"
+TAPS_CUTOFF = "09:30:00"
 
 # Per-group price ranges and tick increments
 # SMT/SMU/SMV/SMS : -0.010 to +0.020, tick 0.01
