@@ -181,6 +181,46 @@ def _strip_sort_key(strip: str) -> tuple:
     return (9, 99, 99)
 
 
+def _assign_balmo_diff_cc(ts_rows: list[dict]) -> list[dict]:
+    """
+    Pre-processing pass for a single timestamp's rows.
+
+    Bal Month spread diff rows (strip like "Bal Month/Jul26") often have a
+    blank CC because the blotter omits it on diff lines.  If we can find a
+    non-diff leg at the same timestamp whose strip starts with "Bal" and
+    whose CC is non-blank, we copy that CC onto the blank-CC diff row so
+    that both rows land in the same cc_map bucket.
+
+    Also handles "Bal Month-ND" and other "Bal …" variants.
+    """
+    # Build a map: bal-strip-prefix → CC  from known leg rows
+    # e.g. "Bal Month" → "NJD",  "Bal Month-ND" → "SMU"
+    bal_leg_cc: dict[str, str] = {}
+    for r in ts_rows:
+        if (not r.get("is_diff_row") and not r.get("cancelled")
+                and r.get("cc") and r["strip"].lower().startswith("bal")):
+            bal_leg_cc[r["strip"].strip()] = r["cc"]
+
+    if not bal_leg_cc:
+        return ts_rows
+
+    result = []
+    for r in ts_rows:
+        if (r.get("is_diff_row") and not r.get("cc")
+                and r["strip"].lower().startswith("bal")):
+            # The diff strip is typically "Bal Month/Jul26".
+            # The part before "/" should match the leg's strip.
+            first_part = r["strip"].split("/")[0].strip()
+            # Try exact match first, then any single Bal leg at this ts
+            cc = bal_leg_cc.get(first_part) or (
+                next(iter(bal_leg_cc.values())) if len(bal_leg_cc) == 1 else "")
+            if cc:
+                r = dict(r)   # shallow copy — don't mutate the original
+                r["cc"] = cc
+        result.append(r)
+    return result
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  TRADE GROUPING — same-product only
 # ═══════════════════════════════════════════════════════════════════════════
@@ -210,6 +250,12 @@ def group_rows_into_trades(raw_rows: list[dict]) -> list[dict]:
 
     for ts, ts_group in groupby(rows, key=lambda r: r["timestamp"]):
         ts_rows = list(ts_group)
+
+        # ── Pre-pass: give blank-CC diff rows the CC of their matching Bal leg ──
+        # Bal Month spread diff rows (strip = "Bal Month/AugXX") frequently come
+        # off the blotter with no CC, while the outright Bal leg has a proper CC.
+        # Without this fix they fall into separate cc_map buckets and never pair.
+        ts_rows = _assign_balmo_diff_cc(ts_rows)
 
         # Split by CC — different CCs always independent at this stage
         cc_map: dict[str, list] = {}

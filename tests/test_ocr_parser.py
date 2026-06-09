@@ -21,6 +21,7 @@ class TestIsStripToken:
     def test_bal_and_month(self):
         assert _is_strip_token("Bal")
         assert _is_strip_token("Month")
+        assert _is_strip_token("Month-ND")
 
     def test_quarter(self):
         assert _is_strip_token("Q1")

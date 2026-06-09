@@ -347,6 +347,32 @@ class TestOrphanedBalMonth:
         trades = group_rows_into_trades(rows)
         assert trades[0]["trade_type"] in ("OUTRIGHT", "TAPS")
 
+    def test_balmo_diff_has_blank_cc_still_paired(self):
+        """Diff row with blank CC (as blotter omits it) is matched to Bal leg CC."""
+        rows = [
+            {**_row("09:20:51 BST", "NJD", 10, "Bal Month", 744.00), "is_diff_row": False},
+            {"timestamp": "09:20:51 BST", "cc": "", "qty": 10,
+             "strip": "Bal Month/Aug26", "hub": "Naphtha C&F Japan Cg",
+             "price": 6.50, "is_diff_row": True, "cancelled": False},
+        ]
+        trades = group_rows_into_trades(rows)
+        assert len(trades) == 1
+        assert trades[0]["trade_type"] == "SPREAD"
+        assert trades[0]["cc"] == "NJD"
+        assert trades[0]["spread_price"] == pytest.approx(6.50)
+
+    def test_balmo_nd_diff_blank_cc_paired(self):
+        """Bal Month-ND variant also pairs correctly."""
+        rows = [
+            {**_row("09:20:51 BST", "SMU", 50, "Bal Month-ND", 117.40), "is_diff_row": False},
+            {"timestamp": "09:20:51 BST", "cc": "", "qty": 50,
+             "strip": "Bal Month-ND/Jul26", "hub": "Sing Mogas 92 Unl (Platts)",
+             "price": 6.50, "is_diff_row": True, "cancelled": False},
+        ]
+        trades = group_rows_into_trades(rows)
+        assert len(trades) == 1
+        assert trades[0]["trade_type"] == "SPREAD"
+
 
 # ── Sequential spread legs ────────────────────────────────────────────────────
 

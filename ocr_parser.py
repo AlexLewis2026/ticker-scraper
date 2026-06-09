@@ -42,7 +42,7 @@ _STRIP_TOKEN_RE = re.compile(
     r"|[A-Za-z]+\d{2}"          # MonthYY: Jul26, Aug26, Dec27
     r"|[A-Za-z]+\d{2}/[A-Za-z]*\d{2}"  # spread: Jul26/Aug26
     r"|Bal$"                     # "Bal" (always followed by "Month")
-    r"|Month"                    # "Month" or "Month/MonthYY"
+    r"|Month(?:-[A-Za-z]+)?"     # "Month", "Month-ND", etc.
     r"|Q[1-4]$"                  # quarter: Q1 Q2 Q3 Q4
     r")$"
 )
