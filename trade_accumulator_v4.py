@@ -27,6 +27,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -147,6 +148,40 @@ def _classify_trade_type(trade: dict) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  STRIP SORT KEY — for sequential leg ordering
+# ═══════════════════════════════════════════════════════════════════════════
+
+_MONTH_IDX = {m: i for i, m in enumerate(
+    ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])}
+
+
+def _strip_sort_key(strip: str) -> tuple:
+    """
+    Return a comparable tuple so strips sort chronologically.
+    Bal Month → always first (front month).
+    MonthYY   → (1, year, month_index)
+    Q[1-4] YY → (1, year, (q-1)*3)
+    YY        → (1, year, 99)
+    unknown   → (9, 99, 99)
+    """
+    s = strip.strip()
+    if s.lower().startswith("bal"):
+        return (0, 0, 0)
+    m = re.match(r"^([A-Za-z]{3})(\d{2})$", s)
+    if m:
+        mon = _MONTH_IDX.get(m.group(1).capitalize(), 99)
+        return (1, int(m.group(2)), mon)
+    m = re.match(r"^Q([1-4])\s*(\d{2})?$", s)
+    if m:
+        return (1, int(m.group(2)) if m.group(2) else 99, (int(m.group(1)) - 1) * 3)
+    m = re.match(r"^(\d{2})$", s)
+    if m:
+        return (1, int(m.group(1)), 99)
+    return (9, 99, 99)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  TRADE GROUPING — same-product only
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -156,13 +191,17 @@ def group_rows_into_trades(raw_rows: list[dict]) -> list[dict]:
 
     Rules (applied per timestamp, then per CC within that timestamp):
 
-      1. Single leg row            → OUTRIGHT
-      2. Multiple legs, same qty   → SPREAD (same-product)
-      3. Multiple legs, mixed qty  → each row becomes a flagged OUTRIGHT
-         (unrelated trades that happen to share a timestamp)
+      1. Single leg row            → OUTRIGHT (or TAPS)
+         • If strip starts with "Bal" AND a diff row is present →
+           synthesise the missing second leg → SPREAD
+      2. Multiple legs, same qty:
+         • 3 legs where outer qtys equal and middle = 2× outer → BUTTERFLY
+         • otherwise → SPREAD (explicit diff if present, else implied)
+      3. Multiple legs, 2 legs different qty → SPREAD with implied diff
+      4. 3+ legs with unresolvable mixed qty → each flagged as OUTRIGHT
 
-    Different CCs at the same timestamp are handled independently —
-    each CC group goes through rules 1-3 on its own.
+    Legs are always sorted into chronological strip order.
+    Different CCs at the same timestamp are handled independently.
     """
     from itertools import groupby
 
@@ -178,11 +217,10 @@ def group_rows_into_trades(raw_rows: list[dict]) -> list[dict]:
             cc_map.setdefault(row["cc"], []).append(row)
 
         for cc, cc_rows in cc_map.items():
-            # Separate cancelled rows — they are recorded but excluded from grouping
+            # Separate cancelled rows — excluded from spread/outright grouping
             cancelled_rows = [r for r in cc_rows if r.get("cancelled")]
             active_rows    = [r for r in cc_rows if not r.get("cancelled")]
 
-            # Record each cancelled row as its own CANCELLED trade
             for cr in cancelled_rows:
                 trades.append({
                     "timestamp":    ts,
@@ -201,9 +239,39 @@ def group_rows_into_trades(raw_rows: list[dict]) -> list[dict]:
             if len(leg_rows) == 0:
                 continue
 
-            # ── Single leg → outright (or TAPS if criteria met) ───────────
+            # ── Single leg ─────────────────────────────────────────────────
             if len(leg_rows) == 1:
                 lr = leg_rows[0]
+
+                # Orphaned Bal Month: one Bal leg + a diff row whose strip is
+                # "Bal Month/XYZ" → synthesise the missing XYZ leg.
+                if lr["strip"].lower().startswith("bal") and diff_rows:
+                    dr     = diff_rows[0]
+                    parts  = dr["strip"].split("/")
+                    if len(parts) == 2:
+                        second_strip = parts[1].strip()
+                        # Leg2 = BalMo price − diff  (works for ± diff)
+                        second_price = round(lr["price"] - dr["price"], 6)
+                        legs = sorted(
+                            [
+                                {"strip": lr["strip"],    "price": lr["price"]},
+                                {"strip": second_strip,   "price": second_price},
+                            ],
+                            key=lambda l: _strip_sort_key(l["strip"]),
+                        )
+                        trades.append({
+                            "timestamp":    ts,
+                            "trade_type":   "SPREAD",
+                            "notes":        "balmo spread (leg synthesised)",
+                            "cc":           cc,
+                            "qty":          lr["qty"],
+                            "hub":          lr["hub"],
+                            "spread_price": dr["price"],
+                            "legs":         legs,
+                        })
+                        continue
+
+                # Normal single leg → OUTRIGHT / TAPS
                 t = {
                     "timestamp":    ts,
                     "trade_type":   "OUTRIGHT",
@@ -219,33 +287,71 @@ def group_rows_into_trades(raw_rows: list[dict]) -> list[dict]:
                     t["notes"] = "TAPS/MOC"
                 trades.append(t)
 
+            # ── Multiple legs ──────────────────────────────────────────────
             else:
-                qtys = [r["qty"] for r in leg_rows]
+                # Always sort legs chronologically
+                leg_rows_s = sorted(leg_rows,
+                                    key=lambda r: _strip_sort_key(r["strip"]))
+                qtys = [r["qty"] for r in leg_rows_s]
 
-                # ── Same qty → same-product spread ────────────────────────
-                if len(set(qtys)) == 1:
-                    qty = qtys[0]
-                    # Use explicit diff row price if present; otherwise imply
-                    if diff_rows:
-                        sp = diff_rows[0]["price"]
-                    else:
-                        sp = round(leg_rows[0]["price"] - leg_rows[1]["price"], 6)
-
+                # ── Butterfly: 3 legs, outer equal, middle = 2× outer ─────
+                if (len(leg_rows_s) == 3
+                        and qtys[0] == qtys[2]
+                        and qtys[1] == 2 * qtys[0]):
+                    p = [r["price"] for r in leg_rows_s]
+                    fly = round((p[0] - p[1]) - (p[1] - p[2]), 6)
                     legs = [{"strip": r["strip"], "price": r["price"]}
-                            for r in leg_rows]
+                            for r in leg_rows_s]
+                    trades.append({
+                        "timestamp":    ts,
+                        "trade_type":   "BUTTERFLY",
+                        "notes":        "butterfly",
+                        "cc":           cc,
+                        "qty":          qtys[0],
+                        "hub":          leg_rows_s[0]["hub"],
+                        "spread_price": fly,
+                        "legs":         legs,
+                    })
 
+                # ── Same qty → SPREAD ─────────────────────────────────────
+                elif len(set(qtys)) == 1:
+                    qty = qtys[0]
+                    if diff_rows:
+                        sp   = diff_rows[0]["price"]
+                        note = ""
+                    else:
+                        sp   = round(leg_rows_s[0]["price"] - leg_rows_s[1]["price"], 6)
+                        note = "implied diff"
+                    legs = [{"strip": r["strip"], "price": r["price"]}
+                            for r in leg_rows_s]
                     trades.append({
                         "timestamp":    ts,
                         "trade_type":   "SPREAD",
-                        "notes":        "" if diff_rows else "implied diff",
+                        "notes":        note,
                         "cc":           cc,
                         "qty":          qty,
-                        "hub":          leg_rows[0]["hub"],
+                        "hub":          leg_rows_s[0]["hub"],
                         "spread_price": sp,
                         "legs":         legs,
                     })
 
-                # ── Mixed qty → flag each as unrelated outright ───────────
+                # ── 2 legs, different qty → unequal SPREAD ────────────────
+                elif len(leg_rows_s) == 2:
+                    sp   = round(leg_rows_s[0]["price"] - leg_rows_s[1]["price"], 6)
+                    legs = [{"strip": r["strip"], "price": r["price"]}
+                            for r in leg_rows_s]
+                    trades.append({
+                        "timestamp":    ts,
+                        "trade_type":   "SPREAD",
+                        "notes":        "implied diff (unequal qty)",
+                        "cc":           cc,
+                        "qty":          leg_rows_s[0]["qty"],
+                        "hub":          leg_rows_s[0]["hub"],
+                        "spread_price": sp,
+                        "legs":         legs,
+                    })
+
+                # ── 3+ legs with unresolvable mixed qty → flag outrights ──
                 else:
                     for lr in leg_rows:
                         trades.append({
@@ -501,11 +607,10 @@ def _rebuild_tally(wb):
             buckets[(cc, l["strip"], tt)].append(
                 {"ts": t["ts"], "qty": qty, "price": l["price"]})
 
-        elif tt == "SPREAD" and t["sp"] is not None:
-            # One row per spread trade using the differential price only.
-            # Individual legs are not shown separately to avoid duplication.
+        elif tt in ("SPREAD", "BUTTERFLY") and t["sp"] is not None:
+            # One row per spread/butterfly using the differential price only.
             diff_label = " / ".join(l["strip"] for l in legs)
-            buckets[(cc, diff_label, "SPREAD")].append(
+            buckets[(cc, diff_label, tt)].append(
                 {"ts": t["ts"], "qty": qty, "price": t["sp"]})
 
     # Sort each bucket by timestamp
@@ -513,7 +618,7 @@ def _rebuild_tally(wb):
         buckets[k].sort(key=lambda x: x["ts"])
 
     # ── Sort keys: CC → kind order → strip label ──────────────────────────
-    KIND_ORDER = {"OUTRIGHT": 0, "TAPS": 1, "SPREAD": 2}
+    KIND_ORDER = {"OUTRIGHT": 0, "TAPS": 1, "SPREAD": 2, "BUTTERFLY": 3}
     sorted_keys = sorted(
         buckets.keys(),
         key=lambda k: (k[0], KIND_ORDER.get(k[2], 9), k[1])
@@ -534,7 +639,8 @@ def _rebuild_tally(wb):
     for key in sorted_keys:
         cc_key, strip_label, kind = key
         recs      = buckets[key]
-        trade_fill = F_SPREAD if kind == "SPREAD" else F_FLAG if kind == "TAPS" else F_OUT
+        trade_fill = (F_SPREAD if kind in ("SPREAD", "BUTTERFLY")
+                      else F_FLAG if kind == "TAPS" else F_OUT)
 
         # CC banner (new CC)
         if cc_key != prev_cc:
@@ -552,7 +658,8 @@ def _rebuild_tally(wb):
             prev_cc = cc_key
 
         # Block sub-header
-        kind_label = {"OUTRIGHT": "Outright", "TAPS": "TAPS / MOC", "SPREAD": "Spread"}[kind]
+        kind_label = {"OUTRIGHT": "Outright", "TAPS": "TAPS / MOC",
+                      "SPREAD": "Spread", "BUTTERFLY": "Butterfly"}[kind]
         block_title = f"{strip_label}  [{kind_label}]"
 
         for ci in range(1, 7):

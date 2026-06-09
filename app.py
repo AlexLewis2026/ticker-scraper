@@ -207,11 +207,12 @@ HTML = r"""
     border-bottom: 1px solid #30363d;
   }
   .badge { font-size: 11px; font-weight: bold; border-radius: 4px; padding: 2px 7px; }
-  .badge-outright { background: #21262d; color: #e6edf3; }
-  .badge-spread   { background: #3d2b00; color: #f0b429; }
+  .badge-outright  { background: #21262d; color: #e6edf3; }
+  .badge-spread    { background: #3d2b00; color: #f0b429; }
   .badge-taps      { background: #0d2b3e; color: #58a6ff; }
   .badge-cancelled { background: #1a1a1a; color: #666; text-decoration: line-through; }
   .badge-flag      { background: #490202; color: #f85149; }
+  .badge-butterfly { background: #2b0040; color: #d2a8ff; }
 
   .trade-card-body {
     display: grid;
@@ -346,6 +347,7 @@ HTML = r"""
   tbody tr.taps      { background: #0d1f2e; }
   tbody tr.flag      { background: #2b0000; }
   tbody tr.cancelled { background: #1a1a1a; opacity: 0.55; text-decoration: line-through; }
+  tbody tr.butterfly { background: #1a0029; }
   tbody td { padding: 5px 10px; white-space: nowrap; }
   .num { text-align: right; font-family: monospace; }
 
@@ -644,7 +646,8 @@ function renderTrades(trades) {
     const isSpread    = t.trade_type === 'SPREAD';
     const isTaps      = t.trade_type === 'TAPS';
     const isCancelled = t.trade_type === 'CANCELLED';
-    const badgeCls    = isFlag ? 'badge-flag' : isSpread ? 'badge-spread' : isTaps ? 'badge-taps' : isCancelled ? 'badge-cancelled' : 'badge-outright';
+    const isBfly      = t.trade_type === 'BUTTERFLY';
+    const badgeCls    = isFlag ? 'badge-flag' : isBfly ? 'badge-butterfly' : isSpread ? 'badge-spread' : isTaps ? 'badge-taps' : isCancelled ? 'badge-cancelled' : 'badge-outright';
     const badgeLbl = isFlag ? '⚠ ' + t.trade_type : t.trade_type;
     const fields   = [
       ['Timestamp', t.timestamp], ['CC', t.cc], ['Qty', t.qty], ['Hub', t.hub || '—'],
@@ -810,7 +813,7 @@ function renderLog(rows) {
     <table>
       <thead><tr>${cols.map(c=>`<th>${c}</th>`).join('')}</tr></thead>
       <tbody>${rows.map(r => {
-        const cls = (r[2]&&r[2].includes('⚠')) ? 'flag' : r[1]==='SPREAD' ? 'spread' : r[1]==='TAPS' ? 'taps' : r[1]==='CANCELLED' ? 'cancelled' : '';
+        const cls = (r[2]&&r[2].includes('⚠')) ? 'flag' : r[1]==='BUTTERFLY' ? 'butterfly' : r[1]==='SPREAD' ? 'spread' : r[1]==='TAPS' ? 'taps' : r[1]==='CANCELLED' ? 'cancelled' : '';
         return `<tr class="${cls}">${r.map((v,i)=>`<td class="${numCols.has(i)?'num':''}">${v??''}</td>`).join('')}</tr>`;
       }).join('')}</tbody>
     </table>`;
@@ -848,7 +851,7 @@ function renderTally(groups) {
   groups.forEach(g => {
     container.insertAdjacentHTML('beforeend', `<div class="tally-cc-banner">⬛ ${g.cc}</div>`);
     g.blocks.forEach(bl => {
-      const isSpread = bl.kind !== 'OUTRIGHT';
+      const isSpread = bl.kind === 'SPREAD' || bl.kind === 'BUTTERFLY';
       const rows = bl.trades.map((t, i) => {
         const rc = isSpread ? 'spread-row' : i%2===0 ? 'trade-even' : 'trade-odd';
         return `<tr class="${rc}">
@@ -969,18 +972,18 @@ def _compute_tally():
             l = legs[0]
             buckets[(cc, l["strip"], tt)].append(
                 {"ts": ts, "qty": qty, "price": float(l["price"])})
-        elif tt == "SPREAD" and sp is not None:
-            # One entry per spread trade using the differential price.
-            # Individual legs are not shown separately to avoid duplication.
+        elif tt in ("SPREAD", "BUTTERFLY") and sp is not None:
+            # One entry per spread/butterfly using the differential price.
             diff_label = " / ".join(l["strip"] for l in legs)
-            buckets[(cc, diff_label, "SPREAD")].append(
+            buckets[(cc, diff_label, tt)].append(
                 {"ts": ts, "qty": qty, "price": float(sp)})
 
     for k in buckets:
         buckets[k].sort(key=lambda x: x["ts"])
 
-    KIND_ORDER = {"OUTRIGHT": 0, "TAPS": 1, "SPREAD": 2}
-    KIND_LABEL = {"OUTRIGHT": "Outright", "TAPS": "TAPS / MOC", "SPREAD": "Spread"}
+    KIND_ORDER = {"OUTRIGHT": 0, "TAPS": 1, "SPREAD": 2, "BUTTERFLY": 3}
+    KIND_LABEL = {"OUTRIGHT": "Outright", "TAPS": "TAPS / MOC",
+                  "SPREAD": "Spread", "BUTTERFLY": "Butterfly"}
     sorted_keys = sorted(buckets, key=lambda k: (k[0], KIND_ORDER.get(k[2], 9), k[1]))
 
     cc_groups = {}

@@ -1,7 +1,7 @@
 """Tests for trade_accumulator_v4.group_rows_into_trades."""
 
 import pytest
-from trade_accumulator_v4 import group_rows_into_trades, TAPS_CC
+from trade_accumulator_v4 import group_rows_into_trades, TAPS_CC, _strip_sort_key
 
 
 def _row(ts, cc, qty, strip, price, is_diff=False, hub="Naphtha CIF NWE Cg"):
@@ -53,15 +53,17 @@ class TestGroupRows:
         assert trades[0]["spread_price"] == 8.5
         assert trades[0]["notes"]        == ""
 
-    def test_mixed_qty_flags_as_outrights(self):
+    def test_two_legs_different_qty_is_unequal_spread(self):
+        """Rule 4: 2 legs same CC/timestamp but different qty → SPREAD with implied diff."""
         rows = [
-            _row("12:00:00 BST", "NEC", 10, "Jul26", 700.0),
-            _row("12:00:00 BST", "NEC", 20, "Aug26", 690.0),
+            _row("12:00:00 BST", "NEC", 75, "Jul26", 700.0),
+            _row("12:00:00 BST", "NEC", 25, "Aug26", 690.0),
         ]
         trades = group_rows_into_trades(rows)
-        assert len(trades) == 2
-        assert all(t["trade_type"] == "OUTRIGHT" for t in trades)
-        assert all("⚠" in t["notes"] for t in trades)
+        assert len(trades) == 1
+        assert trades[0]["trade_type"] == "SPREAD"
+        assert trades[0]["spread_price"] == pytest.approx(10.0)
+        assert "unequal" in trades[0]["notes"]
 
     def test_different_ccs_at_same_timestamp_are_independent(self):
         rows = [
@@ -244,3 +246,144 @@ class TestTapsDetection:
         ]
         trades = group_rows_into_trades(rows)
         assert trades[0]["trade_type"] == "SPREAD"
+
+
+# ── Butterfly trades ──────────────────────────────────────────────────────────
+
+class TestButterflyTrades:
+
+    def test_butterfly_detected(self):
+        """Middle leg double the outer legs → BUTTERFLY; fly = (L1-L2) - (L2-L3)."""
+        rows = [
+            _row("10:51:00 BST", "NJC", 15, "Mar27", 655.00),
+            _row("10:51:00 BST", "NJC", 30, "Apr27", 645.50),
+            _row("10:51:00 BST", "NJC", 15, "May27", 638.50),
+        ]
+        trades = group_rows_into_trades(rows)
+        assert len(trades) == 1
+        assert trades[0]["trade_type"] == "BUTTERFLY"
+        assert trades[0]["spread_price"] == pytest.approx(2.50)
+        assert trades[0]["qty"] == 15
+
+    def test_butterfly_legs_sorted_sequentially(self):
+        """Legs come out in strip date order regardless of input order."""
+        rows = [
+            _row("10:51:00 BST", "NJC", 15, "May27", 638.50),
+            _row("10:51:00 BST", "NJC", 30, "Apr27", 645.50),
+            _row("10:51:00 BST", "NJC", 15, "Mar27", 655.00),
+        ]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "BUTTERFLY"
+        strips = [l["strip"] for l in trades[0]["legs"]]
+        assert strips == ["Mar27", "Apr27", "May27"]
+
+    def test_three_equal_legs_not_butterfly(self):
+        """Three legs of equal qty → SPREAD, not BUTTERFLY."""
+        rows = [
+            _row("12:00:00 BST", "NEC", 5, "Jul26", 700.0),
+            _row("12:00:00 BST", "NEC", 5, "Aug26", 690.0),
+            _row("12:00:00 BST", "NEC", 5, "Sep26", 680.0),
+        ]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "SPREAD"
+
+    def test_butterfly_wrong_middle_qty_not_butterfly(self):
+        """Middle leg 1.5× outer → not a butterfly; flags as outrights."""
+        rows = [
+            _row("12:00:00 BST", "NEC", 10, "Jul26", 700.0),
+            _row("12:00:00 BST", "NEC", 15, "Aug26", 690.0),
+            _row("12:00:00 BST", "NEC", 10, "Sep26", 680.0),
+        ]
+        trades = group_rows_into_trades(rows)
+        # Falls into the 3+ mixed-qty → flagged outrights branch
+        assert all(t["trade_type"] == "OUTRIGHT" for t in trades)
+        assert all("⚠" in t["notes"] for t in trades)
+
+
+# ── Orphaned Bal Month ────────────────────────────────────────────────────────
+
+class TestOrphanedBalMonth:
+
+    def _diff_row(self, ts, cc, qty, strip, price):
+        return {"timestamp": ts, "cc": cc, "qty": qty, "strip": strip,
+                "hub": "Sing Mogas 92 Unl (Platts)", "price": price,
+                "is_diff_row": True, "cancelled": False}
+
+    def test_balmo_with_diff_synthesises_spread(self):
+        """Single Bal Month leg + diff row → SPREAD with synthesised leg."""
+        rows = [
+            _row("08:42:46 BST", "SMU", 50, "Bal Month", 117.40),
+            self._diff_row("08:42:46 BST", "SMU", 50, "Bal Month/Jul26", 6.50),
+        ]
+        # Mark first row as not diff
+        rows[0]["is_diff_row"] = False
+        trades = group_rows_into_trades(rows)
+        assert len(trades) == 1
+        t = trades[0]
+        assert t["trade_type"] == "SPREAD"
+        assert t["spread_price"] == pytest.approx(6.50)
+        strips = [l["strip"] for l in t["legs"]]
+        assert "Bal Month" in strips
+        assert "Jul26" in strips
+        # Synthesised Jul26 price = 117.40 - 6.50 = 110.90
+        jul_leg = next(l for l in t["legs"] if l["strip"] == "Jul26")
+        assert jul_leg["price"] == pytest.approx(110.90)
+
+    def test_balmo_negative_diff_adds(self):
+        """Negative diff: Leg2 = BalMo - (negative) = BalMo + |diff|."""
+        rows = [
+            _row("08:42:46 BST", "SMU", 50, "Bal Month", 117.40),
+            self._diff_row("08:42:46 BST", "SMU", 50, "Bal Month/Jul26", -2.50),
+        ]
+        rows[0]["is_diff_row"] = False
+        trades = group_rows_into_trades(rows)
+        jul_leg = next(l for l in trades[0]["legs"] if l["strip"] == "Jul26")
+        assert jul_leg["price"] == pytest.approx(119.90)
+
+    def test_single_balmo_no_diff_stays_outright(self):
+        """Bal Month with no diff row → still an OUTRIGHT."""
+        rows = [_row("08:42:46 BST", "SMU", 50, "Bal Month", 117.40)]
+        rows[0]["is_diff_row"] = False
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] in ("OUTRIGHT", "TAPS")
+
+
+# ── Sequential spread legs ────────────────────────────────────────────────────
+
+class TestSequentialLegs:
+
+    def test_spread_legs_sorted_by_strip(self):
+        """Legs always come out in chronological strip order."""
+        rows = [
+            _row("12:00:00 BST", "NEC", 10, "Aug26", 690.0),
+            _row("12:00:00 BST", "NEC", 10, "Mar27", 620.0),
+        ]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["trade_type"] == "SPREAD"
+        strips = [l["strip"] for l in trades[0]["legs"]]
+        assert strips == ["Aug26", "Mar27"]
+
+    def test_bal_month_always_first_leg(self):
+        """Bal Month sorts before any named month."""
+        rows = [
+            _row("12:00:00 BST", "NEC", 10, "Jul26", 700.0),
+            _row("12:00:00 BST", "NEC", 10, "Bal Month", 710.0),
+        ]
+        trades = group_rows_into_trades(rows)
+        assert trades[0]["legs"][0]["strip"] == "Bal Month"
+
+
+# ── Strip sort key ────────────────────────────────────────────────────────────
+
+class TestStripSortKey:
+
+    def test_bal_month_first(self):
+        assert _strip_sort_key("Bal Month") < _strip_sort_key("Jul26")
+
+    def test_month_year_order(self):
+        assert _strip_sort_key("Jul26") < _strip_sort_key("Aug26")
+        assert _strip_sort_key("Aug26") < _strip_sort_key("Mar27")
+
+    def test_quarter_order(self):
+        assert _strip_sort_key("Q1 26") < _strip_sort_key("Q3 26")
+        assert _strip_sort_key("Q3 26") < _strip_sort_key("Q1 27")
