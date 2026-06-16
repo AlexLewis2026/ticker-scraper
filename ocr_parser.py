@@ -32,6 +32,13 @@ PRICE_RE = re.compile(
 # TT values that indicate a cancelled trade (case-insensitive match)
 _CANCEL_TT = {"cancelled", "cancel", "cxl"}
 
+# Submission timestamp that appears as a second timestamp after Ex.Time in
+# newer blotter formats (e.g. "12:26:32 BST ").  Skip this entire token pair.
+_SUB_TS_RE = re.compile(r"^\d{2}:\d{2}:\d{2}\s+[A-Z]{2,5}\s+")
+
+# Region tokens that appear between CC and Strip in the new blotter format.
+_REGION_TOKENS = frozenset({"europe", "singapore", "asia", "americas"})
+
 # Qty stuck to first strip word, e.g. "4Bal" "5Aug26" "1Q3"
 QTY_STUCK_RE = re.compile(r"^(\d+)([A-Za-z].*)$")
 
@@ -43,6 +50,7 @@ _STRIP_TOKEN_RE = re.compile(
     r"|[A-Za-z]+\d{2}/[A-Za-z]*\d{2}"  # spread: Jul26/Aug26
     r"|Bal$"                     # "Bal" (always followed by "Month")
     r"|Month(?:-[A-Za-z]+)?"     # "Month", "Month-ND", etc.
+    r"|Cal$"                     # "Cal" (always followed by bare year: Cal 27)
     r"|Q[1-4]$"                  # quarter: Q1 Q2 Q3 Q4
     r")$"
 )
@@ -153,6 +161,12 @@ def _parse_line(line: str) -> dict | None:
     timestamp = m.group(1) + " " + m.group(2)
     rest = m.group(3).strip()
 
+    # 1b. Skip submission timestamp if present (new blotter format has
+    #     Ex.Time followed immediately by Sub.Time, e.g. "12:26:32 BST ")
+    sub_m = _SUB_TS_RE.match(rest)
+    if sub_m:
+        rest = rest[sub_m.end():]
+
     # 2. Extract price + trade-type code from end
     pm = PRICE_RE.search(rest)
     if not pm:
@@ -216,6 +230,11 @@ def _parse_line(line: str) -> dict | None:
         cc     = tokens[0]
         tokens = tokens[1:]
 
+    # 4b. Skip region token if present (new blotter format inserts
+    #     "Europe" / "Singapore" between CC and Strip)
+    if tokens and tokens[0].lower() in _REGION_TOKENS:
+        tokens = tokens[1:]
+
     # 5. Strip: consume tokens that match strip patterns.
     #    Everything after the strip is the hub.
     hub_start = len(tokens)
@@ -225,6 +244,13 @@ def _parse_line(line: str) -> dict | None:
         else:
             hub_start = i
             break
+
+    # 5b. Detect explicit "spread" strategy marker right after the strip
+    #     (new blotter format; old format falls back to heuristic below).
+    explicit_spread = False
+    if hub_start < len(tokens) and tokens[hub_start].lower() == "spread":
+        explicit_spread = True
+        hub_start += 1
 
     strip = " ".join(strip_tokens)
     if not strip:
@@ -236,8 +262,9 @@ def _parse_line(line: str) -> dict | None:
     if not cc and hub:
         cc = _hub_to_cc(hub)
 
-    # 7. Diff row: strip contains "/" and price is small (spread differential)
-    is_diff = "/" in strip and abs(price) < 100
+    # 7. Diff row: explicit "spread" keyword takes priority; fallback to
+    #    heuristic (strip contains "/" and price is small) for old format.
+    is_diff = explicit_spread or ("/" in strip and abs(price) < 100)
 
     return {
         "timestamp":   timestamp,

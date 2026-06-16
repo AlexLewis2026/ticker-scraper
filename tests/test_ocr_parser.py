@@ -341,3 +341,74 @@ class TestParseImageLocal:
         bad.write_bytes(b"not an image")
         with pytest.raises((ValueError, Exception)):
             parse_image_local(str(bad))
+
+
+# ── New blotter format (Ex.Time + Sub.Time + Region + Strategies) ─────────────
+
+class TestNewBlotterFormat:
+
+    def test_sub_timestamp_skipped(self):
+        """Second timestamp (Sub.Time) is skipped; Ex.Time is kept."""
+        line = "12:20:57 BST 12:26:32 BST 6 AEO Europe Aug26 858.00 © BLK"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["timestamp"] == "12:20:57 BST"
+        assert row["qty"]   == 6
+        assert row["cc"]    == "AEO"
+        assert row["strip"] == "Aug26"
+        assert row["price"] == 858.00
+
+    def test_region_europe_skipped(self):
+        """'Europe' between CC and Strip is discarded."""
+        line = "12:20:57 BST 12:26:32 BST 6 AEO Europe Jul26/Aug26 spread 23.00 © BLK"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["cc"]          == "AEO"
+        assert row["strip"]       == "Jul26/Aug26"
+        assert row["is_diff_row"] is True
+        assert row["price"]       == 23.00
+
+    def test_region_singapore_skipped(self):
+        """'Singapore' between CC and Strip is discarded."""
+        line = "11:37:18 BST 11:39:40 BST 5 NJC Singapore Jul26 673.00 © BLK"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["cc"]    == "NJC"
+        assert row["strip"] == "Jul26"
+        assert row["price"] == 673.00
+
+    def test_explicit_spread_keyword_sets_diff_row(self):
+        """'spread' in Strategies column sets is_diff_row without needing heuristic."""
+        line = "11:29:46 BST 11:34:07 BST 50 SMT Singapore Jul26/Aug26 spread 4.05 © BLK"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["is_diff_row"] is True
+        assert row["cc"]    == "SMT"
+        assert row["strip"] == "Jul26/Aug26"
+
+    def test_cal_strip_token(self):
+        """'Cal 27' is recognised as a strip."""
+        line = "12:09:41 BST 12:20:04 BST 5 NBB Europe Cal 27 -9.40 © BLK"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["strip"] == "Cal 27"
+        assert row["qty"]   == 5
+        assert row["cc"]    == "NBB"
+        assert row["price"] == -9.40
+
+    def test_quarter_with_region(self):
+        """Q3 26 strip parsed correctly when Region column is present."""
+        line = "12:15:01 BST 12:25:52 BST 25 AEB Europe Q3 26 23.250 © BLK"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["strip"] == "Q3 26"
+        assert row["qty"]   == 25
+        assert row["cc"]    == "AEB"
+
+    def test_new_format_explicit_spread_large_price_flagged(self):
+        """Explicit 'spread' keyword flags diff row even if price > 100."""
+        line = "11:41:01 BST 11:48:14 BST 10 AEO Europe Oct26/Nov26 spread 33.25 © BLK"
+        row = _parse_line(line)
+        assert row is not None
+        assert row["is_diff_row"] is True
+        assert row["strip"] == "Oct26/Nov26"
