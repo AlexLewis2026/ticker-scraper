@@ -174,17 +174,51 @@ def _parse_line(line: str) -> dict | None:
     else:
         sub_time = ""
 
-    # 2. Extract price + trade-type code from end
-    pm = PRICE_RE.search(rest)
-    if not pm:
-        return None
-    try:
-        price = float(pm.group(1))
-    except ValueError:
-        return None
-    tt_code   = pm.group(2).lower()
-    cancelled = tt_code in _CANCEL_TT
-    rest      = rest[: pm.start()].strip()
+    # 2. Split on the bullet character (♦ • ◆ ●) that separates Price from Hub+TT.
+    #
+    #   New blotter:  Qty CC Region Strip [Strategies] Price ♦ Hub TT
+    #   Old blotter:  CC Qty Strip Hub Price ♦ TT
+    #
+    # The bullet is always a single non-word, non-space character surrounded by
+    # whitespace. We find it, then derive price from the LEFT and hub+TT from
+    # the RIGHT.  Old format: right = just "TT" (hub lives on the left).
+    _BULLET_PAT = re.compile(r"\s+([^\w\s])\s+")
+    bm = _BULLET_PAT.search(rest)
+    if bm:
+        left  = rest[: bm.start()].rstrip()
+        right = rest[bm.end() :].strip()
+
+        # Right side: last token is TT code; everything before it is hub (new format).
+        right_toks = right.split()
+        if right_toks and re.match(r"^[A-Za-z]{2,}$", right_toks[-1]):
+            tt_code    = right_toks[-1].lower()
+            hub_right  = " ".join(right_toks[:-1])
+        else:
+            return None
+
+        # Price = last number on the left side.
+        pm = re.search(r"(-?\d+(?:\.\d+)?)\s*$", left)
+        if not pm:
+            return None
+        try:
+            price = float(pm.group(1))
+        except ValueError:
+            return None
+        cancelled = tt_code in _CANCEL_TT
+        rest      = left[: pm.start()].strip()
+    else:
+        # Fallback: old PRICE_RE (no bullet found — unusual but safe).
+        pm = PRICE_RE.search(rest)
+        if not pm:
+            return None
+        try:
+            price = float(pm.group(1))
+        except ValueError:
+            return None
+        tt_code   = pm.group(2).lower()
+        cancelled = tt_code in _CANCEL_TT
+        rest      = rest[: pm.start()].strip()
+        hub_right = ""
 
     tokens = rest.split()
     if not tokens:
@@ -210,10 +244,7 @@ def _parse_line(line: str) -> dict | None:
     if sm:
         qty_str   = sm.group(1)
         remainder = sm.group(2)
-        # If the stuck remainder is a CC code (all uppercase, no digits)
-        # treat it as CC rather than the first strip word.
-        # e.g. "5NJC" → qty=5, cc="NJC"
-        # e.g. "4Bal" → qty=4, strip_first="Bal"
+        # e.g. "5NJC" → qty=5, cc="NJC" / "4Bal" → qty=4, strip_first="Bal"
         if CC_PATTERN.match(remainder):
             cc           = remainder
             strip_tokens = []
@@ -243,7 +274,8 @@ def _parse_line(line: str) -> dict | None:
         tokens = tokens[1:]
 
     # 5. Strip: consume tokens that match strip patterns.
-    #    Everything after the strip is the hub.
+    #    Everything after the strip is the hub (old format only; new format
+    #    hub comes from hub_right extracted above).
     hub_start = len(tokens)
     for i, tok in enumerate(tokens):
         if _is_strip_token(tok):
@@ -252,8 +284,7 @@ def _parse_line(line: str) -> dict | None:
             hub_start = i
             break
 
-    # 5b. Detect explicit "spread" strategy marker right after the strip
-    #     (new blotter format; old format falls back to heuristic below).
+    # 5b. Detect explicit "spread" strategy marker right after the strip.
     explicit_spread = False
     if hub_start < len(tokens) and tokens[hub_start].lower() == "spread":
         explicit_spread = True
@@ -263,7 +294,8 @@ def _parse_line(line: str) -> dict | None:
     if not strip:
         return None
 
-    hub = " ".join(tokens[hub_start:]).strip()
+    # Hub: new format provides it after the bullet; old format it's left tokens.
+    hub = hub_right if hub_right else " ".join(tokens[hub_start:]).strip()
 
     # 6. Fill blank CC from hub when the blotter omits it (e.g. Bal Month rows)
     if not cc and hub:
