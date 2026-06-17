@@ -32,12 +32,16 @@ PRICE_RE = re.compile(
 # TT values that indicate a cancelled trade (case-insensitive match)
 _CANCEL_TT = {"cancelled", "cancel", "cxl"}
 
-# Submission timestamp that appears as a second timestamp after Ex.Time in
-# newer blotter formats (e.g. "12:26:32 BST ").  Skip this entire token pair.
-_SUB_TS_RE = re.compile(r"^\d{2}:\d{2}:\d{2}\s+[A-Z]{2,5}\s+")
+# Submission timestamp — new blotter has Ex.Time then Sub.Time back-to-back.
+# Groups capture (HH:MM:SS, TZ) so we can store the value.
+_SUB_TS_RE = re.compile(r"^(\d{2}:\d{2}:\d{2})\s+([A-Z]{2,5})\s+")
 
 # Region tokens that appear between CC and Strip in the new blotter format.
-_REGION_TOKENS = frozenset({"europe", "singapore", "asia", "americas"})
+# "none" appears when the CC column is blank (e.g. Bal Month diff rows).
+_REGION_TOKENS = frozenset({"europe", "singapore", "asia", "americas", "none"})
+
+# Hyphenated strip range, e.g. Mar27-Jun27, Nov26-Oct27 (always a single trade).
+_STRIP_RANGE_RE = re.compile(r"^[A-Za-z]{3}\d{2}-[A-Za-z]{3}\d{2}$")
 
 # Qty stuck to first strip word, e.g. "4Bal" "5Aug26" "1Q3"
 QTY_STUCK_RE = re.compile(r"^(\d+)([A-Za-z].*)$")
@@ -100,8 +104,9 @@ def _hub_to_cc(hub: str) -> str:
 
 def _is_strip_token(tok: str) -> bool:
     """Return True if this token is part of a strip/spread designation."""
-    # Also accept tokens that contain a slash and end with 2-digit year
-    if "/" in tok and re.search(r"\d{2}$", tok):
+    if "/" in tok and re.search(r"\d{2}$", tok):   # spread: Jul26/Aug26
+        return True
+    if _STRIP_RANGE_RE.match(tok):                  # range:  Mar27-Jun27
         return True
     return bool(_STRIP_TOKEN_RE.match(tok))
 
@@ -161,11 +166,13 @@ def _parse_line(line: str) -> dict | None:
     timestamp = m.group(1) + " " + m.group(2)
     rest = m.group(3).strip()
 
-    # 1b. Skip submission timestamp if present (new blotter format has
-    #     Ex.Time followed immediately by Sub.Time, e.g. "12:26:32 BST ")
+    # 1b. Capture and skip submission timestamp when present (new blotter format).
     sub_m = _SUB_TS_RE.match(rest)
     if sub_m:
+        sub_time = sub_m.group(1) + " " + sub_m.group(2)
         rest = rest[sub_m.end():]
+    else:
+        sub_time = ""
 
     # 2. Extract price + trade-type code from end
     pm = PRICE_RE.search(rest)
@@ -268,6 +275,7 @@ def _parse_line(line: str) -> dict | None:
 
     return {
         "timestamp":   timestamp,
+        "sub_time":    sub_time,
         "cc":          cc,
         "qty":         qty,
         "strip":       strip,

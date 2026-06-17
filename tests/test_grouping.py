@@ -65,16 +65,26 @@ class TestGroupRows:
         assert trades[0]["spread_price"] == pytest.approx(10.0)
         assert "unequal" in trades[0]["notes"]
 
-    def test_different_ccs_at_same_timestamp_are_independent(self):
+    def test_different_ccs_same_qty_same_strip_is_interproduct_spread(self):
+        """Two equal-qty legs of different CCs at the same timestamp → INTERPRODUCT_SPREAD."""
         rows = [
             _row("12:00:00 BST", "NEC", 10, "Jul26", 700.0),
             _row("12:00:00 BST", "NJC", 10, "Jul26", 730.0),
         ]
         trades = group_rows_into_trades(rows)
+        assert len(trades) == 1
+        assert trades[0]["trade_type"] == "INTERPRODUCT_SPREAD"
+        assert "NEC" in trades[0]["cc"] and "NJC" in trades[0]["cc"]
+
+    def test_different_ccs_different_qty_are_independent_outrights(self):
+        """Different qty prevents cross-CC merge — both become independent outrights."""
+        rows = [
+            _row("12:00:00 BST", "NEC", 10, "Jul26", 700.0),
+            _row("12:00:00 BST", "NJC", 25, "Jul26", 730.0),
+        ]
+        trades = group_rows_into_trades(rows)
         assert len(trades) == 2
         assert all(t["trade_type"] == "OUTRIGHT" for t in trades)
-        ccs = {t["cc"] for t in trades}
-        assert ccs == {"NEC", "NJC"}
 
     def test_three_legs_same_qty_is_spread(self):
         rows = [

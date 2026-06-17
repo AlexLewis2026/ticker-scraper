@@ -212,7 +212,9 @@ HTML = r"""
   .badge-taps      { background: #0d2b3e; color: #58a6ff; }
   .badge-cancelled { background: #1a1a1a; color: #666; text-decoration: line-through; }
   .badge-flag      { background: #490202; color: #f85149; }
-  .badge-butterfly { background: #2b0040; color: #d2a8ff; }
+  .badge-butterfly     { background: #2b0040; color: #d2a8ff; }
+  .badge-condor        { background: #002b2b; color: #7ee8e8; }
+  .badge-interproduct  { background: #002b00; color: #56d364; }
 
   .trade-card-body {
     display: grid;
@@ -347,7 +349,9 @@ HTML = r"""
   tbody tr.taps      { background: #0d1f2e; }
   tbody tr.flag      { background: #2b0000; }
   tbody tr.cancelled { background: #1a1a1a; opacity: 0.55; text-decoration: line-through; }
-  tbody tr.butterfly { background: #1a0029; }
+  tbody tr.butterfly    { background: #1a0029; }
+  tbody tr.condor       { background: #001a1a; }
+  tbody tr.interproduct { background: #001a00; }
   tbody td { padding: 5px 10px; white-space: nowrap; }
   .num { text-align: right; font-family: monospace; }
 
@@ -647,7 +651,9 @@ function renderTrades(trades) {
     const isTaps      = t.trade_type === 'TAPS';
     const isCancelled = t.trade_type === 'CANCELLED';
     const isBfly      = t.trade_type === 'BUTTERFLY';
-    const badgeCls    = isFlag ? 'badge-flag' : isBfly ? 'badge-butterfly' : isSpread ? 'badge-spread' : isTaps ? 'badge-taps' : isCancelled ? 'badge-cancelled' : 'badge-outright';
+    const isCondor    = t.trade_type === 'CONDOR';
+    const isInterp    = t.trade_type === 'INTERPRODUCT_SPREAD';
+    const badgeCls    = isFlag ? 'badge-flag' : isBfly ? 'badge-butterfly' : isCondor ? 'badge-condor' : isInterp ? 'badge-interproduct' : isSpread ? 'badge-spread' : isTaps ? 'badge-taps' : isCancelled ? 'badge-cancelled' : 'badge-outright';
     const badgeLbl = isFlag ? '⚠ ' + t.trade_type : t.trade_type;
     const fields   = [
       ['Timestamp', t.timestamp], ['CC', t.cc], ['Qty', t.qty], ['Hub', t.hub || '—'],
@@ -813,7 +819,7 @@ function renderLog(rows) {
     <table>
       <thead><tr>${cols.map(c=>`<th>${c}</th>`).join('')}</tr></thead>
       <tbody>${rows.map(r => {
-        const cls = (r[2]&&r[2].includes('⚠')) ? 'flag' : r[1]==='BUTTERFLY' ? 'butterfly' : r[1]==='SPREAD' ? 'spread' : r[1]==='TAPS' ? 'taps' : r[1]==='CANCELLED' ? 'cancelled' : '';
+        const cls = (r[2]&&r[2].includes('⚠')) ? 'flag' : r[1]==='BUTTERFLY' ? 'butterfly' : r[1]==='CONDOR' ? 'condor' : r[1]==='INTERPRODUCT_SPREAD' ? 'interproduct' : r[1]==='SPREAD' ? 'spread' : r[1]==='TAPS' ? 'taps' : r[1]==='CANCELLED' ? 'cancelled' : '';
         return `<tr class="${cls}">${r.map((v,i)=>`<td class="${numCols.has(i)?'num':''}">${v??''}</td>`).join('')}</tr>`;
       }).join('')}</tbody>
     </table>`;
@@ -851,7 +857,7 @@ function renderTally(groups) {
   groups.forEach(g => {
     container.insertAdjacentHTML('beforeend', `<div class="tally-cc-banner">⬛ ${g.cc}</div>`);
     g.blocks.forEach(bl => {
-      const isSpread = bl.kind === 'SPREAD' || bl.kind === 'BUTTERFLY';
+      const isSpread = bl.kind === 'SPREAD' || bl.kind === 'BUTTERFLY' || bl.kind === 'CONDOR' || bl.kind === 'INTERPRODUCT_SPREAD';
       const rows = bl.trades.map((t, i) => {
         const rc = isSpread ? 'spread-row' : i%2===0 ? 'trade-even' : 'trade-odd';
         return `<tr class="${rc}">
@@ -972,8 +978,8 @@ def _compute_tally():
             l = legs[0]
             buckets[(cc, l["strip"], tt)].append(
                 {"ts": ts, "qty": qty, "price": float(l["price"])})
-        elif tt in ("SPREAD", "BUTTERFLY") and sp is not None:
-            # One entry per spread/butterfly using the differential price.
+        elif tt in ("SPREAD", "BUTTERFLY", "CONDOR",
+                    "INTERPRODUCT_SPREAD") and sp is not None:
             diff_label = " / ".join(l["strip"] for l in legs)
             buckets[(cc, diff_label, tt)].append(
                 {"ts": ts, "qty": qty, "price": float(sp)})
@@ -981,31 +987,63 @@ def _compute_tally():
     for k in buckets:
         buckets[k].sort(key=lambda x: x["ts"])
 
-    KIND_ORDER = {"OUTRIGHT": 0, "TAPS": 1, "SPREAD": 2, "BUTTERFLY": 3}
+    KIND_ORDER = {"OUTRIGHT": 0, "TAPS": 1, "SPREAD": 2, "BUTTERFLY": 3,
+                  "CONDOR": 4, "INTERPRODUCT_SPREAD": 5}
     KIND_LABEL = {"OUTRIGHT": "Outright", "TAPS": "TAPS / MOC",
-                  "SPREAD": "Spread", "BUTTERFLY": "Butterfly"}
+                  "SPREAD": "Spread", "BUTTERFLY": "Butterfly",
+                  "CONDOR": "Condor",
+                  "INTERPRODUCT_SPREAD": "Inter-product Spread"}
+
+    # Volume multipliers (mirrors _volume_multiplier in trade_accumulator_v4)
+    def _vol_mult(kind: str, strip_label: str) -> int:
+        if kind in ("SPREAD", "INTERPRODUCT_SPREAD"):
+            return 2
+        if kind in ("BUTTERFLY", "CONDOR"):
+            return 4
+        # OUTRIGHT / TAPS — strip multiplier
+        s = strip_label.strip()
+        import re as _re
+        if _re.match(r"^[Cc]al", s):
+            return 12
+        if _re.match(r"^Q[1-4]", s):
+            return 3
+        m = _re.match(r"^([A-Za-z]{3})(\d{2})-([A-Za-z]{3})(\d{2})$", s)
+        if m:
+            _MI = {mn: i for i, mn in enumerate(
+                ["Jan","Feb","Mar","Apr","May","Jun",
+                 "Jul","Aug","Sep","Oct","Nov","Dec"])}
+            n = (_MI.get(m.group(3).capitalize(),0) - _MI.get(m.group(1).capitalize(),0)
+                 + (int(m.group(4)) - int(m.group(2))) * 12 + 1)
+            return max(1, n)
+        return 1
+
     sorted_keys = sorted(buckets, key=lambda k: (k[0], KIND_ORDER.get(k[2], 9), k[1]))
 
     cc_groups = {}
     for key in sorted_keys:
         cc_key, strip_label, kind = key
-        recs = buckets[key]
+        recs   = buckets[key]
+        mult   = _vol_mult(kind, strip_label)
         cumvol = vwap_num = 0.0
         trade_rows = []
         for rec in recs:
-            q, p = rec["qty"], rec["price"]
-            cumvol   += q
+            q, p    = rec["qty"], rec["price"]
+            cumvol  += q
             vwap_num += q * p
-            vwap = round(vwap_num / cumvol, 6) if cumvol else None
+            vwap    = round(vwap_num / cumvol, 6) if cumvol else None
             trade_rows.append({"ts": rec["ts"], "qty": q, "price": p,
+                                "vol_equiv": q * mult,
                                 "cumvol": cumvol, "vwap": vwap})
-        final_vwap = round(vwap_num / cumvol, 6) if cumvol else None
+        final_vwap    = round(vwap_num / cumvol, 6) if cumvol else None
+        total_vol_eq  = cumvol * mult
         cc_groups.setdefault(cc_key, []).append({
-            "label":      f"{strip_label}  [{KIND_LABEL[kind]}]",
-            "kind":       kind,
-            "trades":     trade_rows,
-            "total_qty":  cumvol,
-            "final_vwap": final_vwap,
+            "label":          f"{strip_label}  [{KIND_LABEL.get(kind, kind)}]",
+            "kind":           kind,
+            "mult":           mult,
+            "trades":         trade_rows,
+            "total_qty":      cumvol,
+            "total_vol_equiv": total_vol_eq,
+            "final_vwap":     final_vwap,
         })
 
     return [{"cc": cc, "blocks": blocks} for cc, blocks in cc_groups.items()]
