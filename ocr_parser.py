@@ -67,18 +67,22 @@ _STRIP_TOKEN_RE = re.compile(
 HUB_CC_MAP: dict[str, str] = {
     # Naphtha CIF NWE
     "naphtha cif nwe cg":                                   "NEC",
+    "naphtha cif nwe cg balmo":                             "NEB",
     "naphtha cif nwe cg mini":                              "NAM",
-    # Naphtha C&F Japan
+    # Naphtha C&F Japan  (Balmo variant = NJD)
     "naphtha c&f japan cg":                                 "NJC",
-    # Sing Mogas
+    "naphtha c&f japan cg balmo":                           "NJD",
+    # Sing Mogas  (Balmo variant = SMU)
     "sing mogas 92 unl (platts)/brent 1st line":            "STB",
+    "sing mogas 92 unl (platts)/brent 1st line balmo":      "SMU",
+    # Argus Eurobob  (Balmo variant = AEB)
+    "argus eurobob oxy fob rdam bg":                        "AEO",
+    "argus eurobob oxy fob rdam bg balmo":                  "AEB",
+    "argus eurobob oxy fob rdam bg mini":                   "AOM",
     # Far East (naphtha)
     "far east":                                             "AFE",
     # Saudi CP
     "saudi cp":                                             "SCP",
-    # Argus Eurobob
-    "argus eurobob oxy fob rdam bg":                        "AEO",
-    "argus eurobob oxy fob rdam bg mini":                   "AOM",
     # MT B-ETR / MT B-ENT (propane)
     "mt b-etr":                                             "PRL",
     "mt b-ent":                                             "PRN",
