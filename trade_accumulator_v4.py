@@ -330,12 +330,11 @@ def _assign_balmo_diff_cc(ts_rows: list[dict]) -> list[dict]:
 
     result = []
     for r in ts_rows:
-        if (r.get("is_diff_row") and not r.get("cc")
-                and r["strip"].lower().startswith("bal")):
-            # The diff strip is typically "Bal Month/Jul26".
-            # The part before "/" should match the leg's strip.
+        if r.get("is_diff_row") and r["strip"].lower().startswith("bal"):
+            # Always inherit CC from the matching Bal leg, overriding any
+            # hub-derived CC (hub lookup can return a sibling CC like NJC
+            # when the leg is NJD — both share the same hub name).
             first_part = r["strip"].split("/")[0].strip()
-            # Try exact match first, then any single Bal leg at this ts
             cc = bal_leg_cc.get(first_part) or (
                 next(iter(bal_leg_cc.values())) if len(bal_leg_cc) == 1 else "")
             if cc:
