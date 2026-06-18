@@ -404,6 +404,55 @@ def group_rows_into_trades(raw_rows: list[dict]) -> list[dict]:
         diffs_all = [r for r in active if r.get("is_diff_row")]
         legs_all  = [r for r in active if not r.get("is_diff_row")]
 
+        # ── Handle standalone diff/fly rows (no separate leg rows present) ──
+        # New blotter format emits a single row for spreads and butterflies.
+        # Process these before the cross-CC / per-CC logic that expects legs.
+        standalone_diffs = []
+        for dr in diffs_all:
+            parts = dr["strip"].split("/")
+            strat = dr.get("strategy", "")
+            if strat == "fly" and len(parts) == 3:
+                # Butterfly: single fly row with 3-strip notation.
+                leg_strips = sorted(parts, key=_strip_sort_key)
+                trades.append({
+                    "timestamp":    ts,
+                    "trade_type":   "BUTTERFLY",
+                    "notes":        "fly row",
+                    "cc":           dr["cc"],
+                    "qty":          dr["qty"],
+                    "hub":          dr.get("hub", ""),
+                    "spread_price": dr["price"],
+                    "legs":         [{"strip": s} for s in leg_strips],
+                })
+            elif len(parts) == 2:
+                # Spread diff row — check if matching outright legs exist;
+                # if not, emit as a standalone spread (price is the differential).
+                matched_leg = next(
+                    (lr for lr in legs_all
+                     if lr["cc"] == dr["cc"]
+                     and lr["strip"] in parts),
+                    None,
+                )
+                if matched_leg is None:
+                    # No leg rows — emit the spread directly from the diff row.
+                    leg_strips = sorted(parts, key=_strip_sort_key)
+                    trades.append({
+                        "timestamp":    ts,
+                        "trade_type":   "SPREAD",
+                        "notes":        "spread row",
+                        "cc":           dr["cc"],
+                        "qty":          dr["qty"],
+                        "hub":          dr.get("hub", ""),
+                        "spread_price": dr["price"],
+                        "legs":         [{"strip": s} for s in leg_strips],
+                    })
+                else:
+                    standalone_diffs.append(dr)   # has matching legs — pair normally
+            else:
+                standalone_diffs.append(dr)
+
+        diffs_all = standalone_diffs
+
         if not legs_all:
             continue
 

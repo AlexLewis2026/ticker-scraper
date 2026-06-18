@@ -228,58 +228,98 @@ def _parse_line(line: str) -> dict | None:
     if not tokens:
         return None
 
-    # 3 & 4. Extract CC and Qty — supports both column orders:
-    #   Old format:  CC  Qty  Strip  Hub   (e.g. "STB 50 Jul26 Sing…")
-    #   New format:  Qty CC   Strip  Hub   (e.g. "50 STB Jul26 Sing…")
+    # 3 & 4. Extract CC and Qty.
+    #
+    # Three column layouts are supported:
+    #
+    #   Layout A (newest — Product prefix):
+    #     Product...  CC  Qty  [Strategies]  Strip
+    #     e.g. "Gasoline Futures Spr  AEO  10  spread  Sep26/Oct26"
+    #     Product tokens have mixed case; CC is the first pure-uppercase token
+    #     immediately followed by a pure-digit token.
+    #
+    #   Layout B (mid-generation — Qty leads, no Product):
+    #     Qty  CC  [Region]  Strip
+    #     e.g. "50 AEO Europe Sep26"
+    #
+    #   Layout C (oldest — CC leads):
+    #     CC  Qty  Strip  Hub
+    #     e.g. "STB 50 Jul26 Sing Mogas…"
+    #
+    # Detection order: A → C → B (A and C both start with a (CC, digit) pair
+    # but C has CC as tokens[0]; A has product words before CC).
+
     cc = ""
+    qty_str = ""
+    strip_tokens: list[str] = []
 
-    if CC_PATTERN.match(tokens[0]):
-        # Old format: CC leads
-        cc     = tokens[0]
-        tokens = tokens[1:]
-        if not tokens:
-            return None
-        first = tokens[0]
-    else:
-        # New format: Qty leads
-        first = tokens[0]
+    # Primary scan: find first i where tokens[i] is CC followed by a qty token.
+    # Qty token is either a plain digit ("50") or digit-stuck-to-strip ("4Bal",
+    # "1Q3", "5NJC").  Covers Layout A (Product prefix) and Layout C (CC-first).
+    found_cc_qty = False
+    for i in range(len(tokens) - 1):
+        if not CC_PATTERN.match(tokens[i]):
+            continue
+        nxt = tokens[i + 1]
+        if nxt.isdigit():
+            cc, qty_str = tokens[i], nxt
+            tokens = tokens[i + 2:]
+            found_cc_qty = True
+            break
+        sm2 = QTY_STUCK_RE.match(nxt)
+        if sm2:
+            cc, qty_str = tokens[i], sm2.group(1)
+            remainder   = sm2.group(2)
+            tokens      = tokens[i + 2:]
+            if CC_PATTERN.match(remainder):
+                # e.g. "5NJC" → discard – CC already found above
+                pass
+            else:
+                strip_tokens = [remainder]
+            found_cc_qty = True
+            break
 
-    sm = QTY_STUCK_RE.match(first)
-    if sm:
-        qty_str   = sm.group(1)
-        remainder = sm.group(2)
-        # e.g. "5NJC" → qty=5, cc="NJC" / "4Bal" → qty=4, strip_first="Bal"
-        if CC_PATTERN.match(remainder):
-            cc           = remainder
-            strip_tokens = []
+    if not found_cc_qty:
+        # Layout B fallback: qty leads (e.g. "50 AEO Europe Sep26")
+        first = tokens[0]
+        sm = QTY_STUCK_RE.match(first)
+        if sm:
+            qty_str   = sm.group(1)
+            remainder = sm.group(2)
+            if CC_PATTERN.match(remainder):
+                cc     = remainder
+                tokens = tokens[1:]
+            else:
+                strip_tokens = [remainder]
+                tokens = tokens[1:]
+                if tokens and CC_PATTERN.match(tokens[0]):
+                    cc     = tokens[0]
+                    tokens = tokens[1:]
+        elif first.isdigit():
+            qty_str = first
+            tokens  = tokens[1:]
+            if tokens and CC_PATTERN.match(tokens[0]):
+                cc     = tokens[0]
+                tokens = tokens[1:]
         else:
-            strip_tokens = [remainder]
-        tokens = tokens[1:]
-    else:
-        if not first.isdigit():
             return None
-        qty_str      = first
-        strip_tokens = []
-        tokens       = tokens[1:]
 
     try:
         qty = int(qty_str)
     except ValueError:
         return None
 
-    # After qty, pick up CC if not already found (new format: Qty CC Strip)
-    if not cc and tokens and CC_PATTERN.match(tokens[0]):
-        cc     = tokens[0]
-        tokens = tokens[1:]
-
-    # 4b. Skip region token if present (new blotter format inserts
-    #     "Europe" / "Singapore" between CC and Strip)
+    # Skip legacy Region token if present (old mid-gen format only).
     if tokens and tokens[0].lower() in _REGION_TOKENS:
         tokens = tokens[1:]
 
-    # 5. Strip: consume tokens that match strip patterns.
-    #    Everything after the strip is the hub (old format only; new format
-    #    hub comes from hub_right extracted above).
+    # 5. Strategies column: "spread" or "fly" — appears before the strip.
+    strategy = ""
+    if tokens and tokens[0].lower() in ("spread", "fly"):
+        strategy = tokens[0].lower()
+        tokens   = tokens[1:]
+
+    # 6. Strip: consume tokens that match strip patterns.
     hub_start = len(tokens)
     for i, tok in enumerate(tokens):
         if _is_strip_token(tok):
@@ -288,12 +328,6 @@ def _parse_line(line: str) -> dict | None:
             hub_start = i
             break
 
-    # 5b. Detect explicit "spread" strategy marker right after the strip.
-    explicit_spread = False
-    if hub_start < len(tokens) and tokens[hub_start].lower() == "spread":
-        explicit_spread = True
-        hub_start += 1
-
     strip = " ".join(strip_tokens)
     if not strip:
         return None
@@ -301,13 +335,15 @@ def _parse_line(line: str) -> dict | None:
     # Hub: new format provides it after the bullet; old format it's left tokens.
     hub = hub_right if hub_right else " ".join(tokens[hub_start:]).strip()
 
-    # 6. Fill blank CC from hub when the blotter omits it (e.g. Bal Month rows)
+    # 7. Fill blank CC from hub when the blotter omits it (e.g. Bal Month rows)
     if not cc and hub:
         cc = _hub_to_cc(hub)
 
-    # 7. Diff row: explicit "spread" keyword takes priority; fallback to
-    #    heuristic (strip contains "/" and price is small) for old format.
-    is_diff = explicit_spread or ("/" in strip and abs(price) < 100)
+    # 8. Diff / fly row detection:
+    #    "spread" strategy → spread diff row.
+    #    "fly"    strategy → butterfly diff row.
+    #    Heuristic fallback for old format (strip has "/" and price is small).
+    is_diff = bool(strategy) or ("/" in strip and abs(price) < 100)
 
     return {
         "timestamp":   timestamp,
@@ -318,6 +354,7 @@ def _parse_line(line: str) -> dict | None:
         "hub":         hub,
         "price":       price,
         "is_diff_row": is_diff,
+        "strategy":    strategy,     # "", "spread", or "fly"
         "cancelled":   cancelled,
     }
 
