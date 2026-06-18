@@ -65,35 +65,47 @@ _STRIP_TOKEN_RE = re.compile(
 # spread-diff rows).  Key = canonical hub name (lowercase for matching).
 # Add new entries here whenever a new hub/CC pair is encountered.
 HUB_CC_MAP: dict[str, str] = {
-    # Naphtha CIF NWE
-    "naphtha cif nwe cg":                                          "NEC",
-    "naphtha cif nwe cg mini":                                     "NAM",
-    # Naphtha CIF NWE crack / Brent spread
-    "naphtha cif nwe cg (platts)/brent 1st line":                  "NBB",
-    # Naphtha C&F Japan  (Balmo variant = NJD confirmed)
-    "naphtha c&f japan cg":                                        "NJC",
-    "naphtha c&f japan cg balmo":                                  "NJD",
-    # Sing Mogas
-    "sing mogas 92 unl (platts)/brent 1st line":                   "STB",
-    "sing mogas unl 95/92 (platts)":                               "SMD",
-    "sing mogas 92 unl (platts)":                                  "SMT",
-    "sing mogas 92 unl (platts) mini":                             "SMV",
-    # Argus Eurobob
-    "argus eurobob oxy fob rdam bg":                               "AEO",
-    "argus eurobob oxy fob rdam bg mini":                          "AOM",
-    # Argus Eurobob crack / Brent spread  (AEB = crack, NOT balmo)
-    "argus eurobob oxy fob rdam bg/brent 1st line (bbl)":          "AEB",
-    # Far East (naphtha)
-    "far east":                                             "AFE",
-    # Saudi CP
-    "saudi cp":                                             "SCP",
-    # MT B-ETR / MT B-ENT (propane)
-    "mt b-etr":                                             "PRL",
-    "mt b-ent":                                             "PRN",
-    # Conway
-    "conway":                                               "PRC",
-    # Far East / CIF ARA (EGD)
-    "far east/cif ara":                                     "EGD",
+    # ── Naphtha CIF NWE ───────────────────────────────────────────────────────
+    "naphtha cif nwe cg":                                              "NEC",
+    "naphtha cif nwe cg mini":                                         "NAM",
+    # Crack / Brent spreads
+    "naphtha cif nwe cg (platts)/brent 1st line":                      "NBB",
+    "naphtha cif nwe cg/brent 1st line":                               "NOB",
+
+    # ── Naphtha C&F Japan  (Balmo = NJD) ─────────────────────────────────────
+    "naphtha c&f japan cg":                                            "NJC",
+    "naphtha c&f japan cg balmo":                                      "NJD",
+
+    # ── Sing Mogas ────────────────────────────────────────────────────────────
+    "sing mogas 92 unl (platts)":                                      "SMT",
+    "sing mogas 92 unl (platts) mini":                                 "SMV",
+    "sing mogas 95 unl (platts)":                                      "SMF",
+    # Diff / crack
+    "sing mogas 92 unl (platts)/brent 1st line":                       "STB",
+    "sing mogas unl 95/92 (platts)":                                   "SMD",
+
+    # ── Argus Eurobob ─────────────────────────────────────────────────────────
+    "argus eurobob oxy fob rdam bg":                                   "AEO",
+    "argus eurobob oxy fob rdam bg mini":                              "AOM",
+    # Crack / Brent spread  (AEB = crack futures, NOT balmo)
+    "argus eurobob oxy fob rdam bg/brent 1st line (bbl)":              "AEB",
+
+    # ── RBOB / Gasoline diff ──────────────────────────────────────────────────
+    "rbob 1st line/argus eurobob oxy fob rdam bg mini":                "GDQ",
+
+    # ── Far East / other naphtha ──────────────────────────────────────────────
+    "far east":                                                        "AFE",
+    "far east/cif ara":                                                "EGD",
+
+    # ── Saudi CP ──────────────────────────────────────────────────────────────
+    "saudi cp":                                                        "SCP",
+
+    # ── MT propane ────────────────────────────────────────────────────────────
+    "mt b-etr":                                                        "PRL",
+    "mt b-ent":                                                        "PRN",
+
+    # ── Conway ────────────────────────────────────────────────────────────────
+    "conway":                                                          "PRC",
 }
 
 
@@ -259,6 +271,7 @@ def _parse_line(line: str) -> dict | None:
 
     cc = ""
     qty_str = ""
+    product = ""           # Product field text (Layout A only)
     strip_tokens: list[str] = []
 
     # Primary scan: find first i where tokens[i] is CC followed by a qty token.
@@ -270,18 +283,19 @@ def _parse_line(line: str) -> dict | None:
             continue
         nxt = tokens[i + 1]
         if nxt.isdigit():
+            product = " ".join(tokens[:i])   # everything before CC = Product field
             cc, qty_str = tokens[i], nxt
             tokens = tokens[i + 2:]
             found_cc_qty = True
             break
         sm2 = QTY_STUCK_RE.match(nxt)
         if sm2:
+            product = " ".join(tokens[:i])
             cc, qty_str = tokens[i], sm2.group(1)
             remainder   = sm2.group(2)
             tokens      = tokens[i + 2:]
             if CC_PATTERN.match(remainder):
-                # e.g. "5NJC" → discard – CC already found above
-                pass
+                pass   # e.g. "5NJC" → CC already found
             else:
                 strip_tokens = [remainder]
             found_cc_qty = True
@@ -374,6 +388,7 @@ def _parse_line(line: str) -> dict | None:
         "price":       price,
         "is_diff_row": is_diff,
         "strategy":    strategy,     # "", "spread", or "fly"
+        "product":     product,      # Product field text, e.g. "Gasoline Futures Spr"
         "cancelled":   cancelled,
     }
 
