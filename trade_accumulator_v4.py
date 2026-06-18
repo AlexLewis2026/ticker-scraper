@@ -237,6 +237,23 @@ def _volume_multiplier(trade: dict) -> int:
     return 1
 
 
+def _next_month_strip() -> str:
+    """
+    Return the MonthYY token for the calendar month after the current one.
+    June 2026 → "Jul26", December 2026 → "Jan27", etc.
+    Used to synthesise the missing leg of a Bal Month spread.
+    """
+    from datetime import date
+    today = date.today()
+    if today.month == 12:
+        nm_month, nm_year = 1, today.year + 1
+    else:
+        nm_month, nm_year = today.month + 1, today.year
+    month_names = ["Jan","Feb","Mar","Apr","May","Jun",
+                   "Jul","Aug","Sep","Oct","Nov","Dec"]
+    return f"{month_names[nm_month - 1]}{str(nm_year)[2:]}"
+
+
 def _try_synthesise_spread(leg_row: dict, diff_row: dict,
                            ts: str, cc: str) -> dict | None:
     """
@@ -246,8 +263,19 @@ def _try_synthesise_spread(leg_row: dict, diff_row: dict,
 
     Diff strip must be "A/B".  If we hold leg A:  missing B = A − diff.
                                 If we hold leg B:  missing A = B + diff.
+
+    Special case: Bal Month spreads in the new blotter format show the diff
+    row with strip "Bal Month" (or "Bal Month-ND") and no "/" notation.
+    The second leg is ALWAYS the next calendar month.  We expand the strip
+    here before the standard matching logic.
     """
-    parts = diff_row["strip"].split("/")
+    diff_strip = diff_row["strip"].strip()
+
+    # Expand bare Bal Month diff strips to "Bal Month/NextMonth".
+    if "/" not in diff_strip and diff_strip.lower().startswith("bal"):
+        diff_strip = f"{diff_strip}/{_next_month_strip()}"
+
+    parts = diff_strip.split("/")
     if len(parts) != 2:
         return None
     leg_strip = leg_row["strip"].strip()

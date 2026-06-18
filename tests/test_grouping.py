@@ -383,6 +383,40 @@ class TestOrphanedBalMonth:
         assert len(trades) == 1
         assert trades[0]["trade_type"] == "SPREAD"
 
+    def test_balmo_diff_no_slash_synthesises_next_month(self):
+        """New blotter format: diff strip is bare 'Bal Month' (no '/NextMonth').
+        The second leg must still be synthesised as the next calendar month."""
+        from datetime import date
+        from trade_accumulator_v4 import _next_month_strip
+        next_strip = _next_month_strip()   # e.g. "Jul26" in June 2026
+        rows = [
+            {**_row("10:00:00 BST", "NJD", 10, "Bal Month", 744.00), "is_diff_row": False},
+            {**_row("10:00:00 BST", "NJD", 10, "Bal Month", 6.50),   "is_diff_row": True},
+        ]
+        trades = group_rows_into_trades(rows)
+        assert len(trades) == 1
+        t = trades[0]
+        assert t["trade_type"] == "SPREAD"
+        assert t["spread_price"] == pytest.approx(6.50)
+        strips = [l["strip"] for l in t["legs"]]
+        assert "Bal Month" in strips
+        assert next_strip in strips
+
+    def test_balmo_nd_diff_no_slash_synthesises_next_month(self):
+        """Same as above but with 'Bal Month-ND' strip."""
+        from trade_accumulator_v4 import _next_month_strip
+        next_strip = _next_month_strip()
+        rows = [
+            {**_row("10:00:00 BST", "SMU", 50, "Bal Month-ND", 117.40), "is_diff_row": False},
+            {**_row("10:00:00 BST", "SMU", 50, "Bal Month-ND", 4.25),   "is_diff_row": True},
+        ]
+        trades = group_rows_into_trades(rows)
+        assert len(trades) == 1
+        assert trades[0]["trade_type"] == "SPREAD"
+        strips = [l["strip"] for l in trades[0]["legs"]]
+        assert "Bal Month-ND" in strips
+        assert next_strip in strips
+
 
 # ── Sequential spread legs ────────────────────────────────────────────────────
 
