@@ -102,11 +102,12 @@ class TestParseLine:
         assert row["is_diff_row"] is False
         assert "Sing" in row["hub"]
 
-    def test_outright_without_cc(self):
+    def test_outright_without_cc_resolved_from_hub(self):
+        """Blank CC is resolved via hub lookup when the hub is in HUB_CC_MAP."""
         line = "13:03:21 BST 25 Jul26 Sing Mogas 92 Unl (Platts)/Brent 1st Line 17.25 @ BLK"
         row = _parse_line(line)
         assert row is not None
-        assert row["cc"]  == ""
+        assert row["cc"]  == "STB"   # resolved from hub map
         assert row["qty"] == 25
 
     def test_qty_stuck_to_strip(self):

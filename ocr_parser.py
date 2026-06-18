@@ -66,19 +66,23 @@ _STRIP_TOKEN_RE = re.compile(
 # Add new entries here whenever a new hub/CC pair is encountered.
 HUB_CC_MAP: dict[str, str] = {
     # Naphtha CIF NWE
-    "naphtha cif nwe cg":                                   "NEC",
-    "naphtha cif nwe cg balmo":                             "NEB",
-    "naphtha cif nwe cg mini":                              "NAM",
-    # Naphtha C&F Japan  (Balmo variant = NJD)
-    "naphtha c&f japan cg":                                 "NJC",
-    "naphtha c&f japan cg balmo":                           "NJD",
-    # Sing Mogas  (Balmo variant = SMU)
-    "sing mogas 92 unl (platts)/brent 1st line":            "STB",
-    "sing mogas 92 unl (platts)/brent 1st line balmo":      "SMU",
-    # Argus Eurobob  (Balmo variant = AEB)
-    "argus eurobob oxy fob rdam bg":                        "AEO",
-    "argus eurobob oxy fob rdam bg balmo":                  "AEB",
-    "argus eurobob oxy fob rdam bg mini":                   "AOM",
+    "naphtha cif nwe cg":                                          "NEC",
+    "naphtha cif nwe cg mini":                                     "NAM",
+    # Naphtha CIF NWE crack / Brent spread
+    "naphtha cif nwe cg (platts)/brent 1st line":                  "NBB",
+    # Naphtha C&F Japan  (Balmo variant = NJD confirmed)
+    "naphtha c&f japan cg":                                        "NJC",
+    "naphtha c&f japan cg balmo":                                  "NJD",
+    # Sing Mogas
+    "sing mogas 92 unl (platts)/brent 1st line":                   "STB",
+    "sing mogas unl 95/92 (platts)":                               "SMD",
+    "sing mogas 92 unl (platts)":                                  "SMT",
+    "sing mogas 92 unl (platts) mini":                             "SMV",
+    # Argus Eurobob
+    "argus eurobob oxy fob rdam bg":                               "AEO",
+    "argus eurobob oxy fob rdam bg mini":                          "AOM",
+    # Argus Eurobob crack / Brent spread  (AEB = crack, NOT balmo)
+    "argus eurobob oxy fob rdam bg/brent 1st line (bbl)":          "AEB",
     # Far East (naphtha)
     "far east":                                             "AFE",
     # Saudi CP
@@ -101,7 +105,11 @@ def _hub_to_cc(hub: str) -> str:
     """
     # Clean OCR junk from the start
     clean = hub.lstrip("=©®@•~-_ ").strip()
-    # Take only the first hub segment (spread diffs have "Hub1/Hub2")
+    # Try full hub name first (e.g. "Sing Mogas 92 Unl (Platts)/Brent 1st Line" → STB)
+    full = clean.lower()
+    if full in HUB_CC_MAP:
+        return HUB_CC_MAP[full]
+    # Fall back to first segment before "/" (spread-diff hubs like "Hub1/Hub2")
     first = clean.split("/")[0].strip().lower()
     return HUB_CC_MAP.get(first, "")
 
@@ -302,7 +310,18 @@ def _parse_line(line: str) -> dict | None:
                 cc     = tokens[0]
                 tokens = tokens[1:]
         else:
-            return None
+            # Layout A with blank CC: Product tokens precede a bare digit qty.
+            # e.g. "Naphtha Futures Spr 20 spread Bal Month/Jul26"
+            # Scan for first pure-digit token; CC stays blank.
+            found_digit = False
+            for i, tok in enumerate(tokens):
+                if tok.isdigit():
+                    qty_str = tok
+                    tokens  = tokens[i + 1:]
+                    found_digit = True
+                    break
+            if not found_digit:
+                return None
 
     try:
         qty = int(qty_str)
