@@ -222,19 +222,16 @@ def _strip_multiplier(strip: str) -> int:
 def _volume_multiplier(trade: dict) -> int:
     """
     Return the volume-equivalent multiplier for a trade.
-      OUTRIGHT / TAPS       → strip multiplier (1, 3, 12, or N months)
-      SPREAD / INTERPRODUCT → ×2
-      BUTTERFLY / CONDOR    → ×4  (1+2+1 or 4 equal legs)
+      OUTRIGHT / TAPS / SPREAD / INTERPRODUCT → strip multiplier (of first leg)
+      BUTTERFLY / CONDOR                       → strip multiplier × 2
     """
     tt   = trade.get("trade_type", "")
     legs = trade.get("legs", [])
-    if tt in ("SPREAD", "INTERPRODUCT_SPREAD"):
-        return 2
+    strip = legs[0].get("strip", "") if legs else ""
+    sm = _strip_multiplier(strip)
     if tt in ("BUTTERFLY", "CONDOR"):
-        return 4
-    if tt in ("OUTRIGHT", "TAPS") and legs:
-        return _strip_multiplier(legs[0].get("strip", ""))
-    return 1
+        return sm * 2
+    return sm
 
 
 def _next_month_strip() -> str:
@@ -648,9 +645,15 @@ def _c(ws, r, c_idx, val, fill=None, halign="left",
 #  SHEET DEFINITIONS
 # ═══════════════════════════════════════════════════════════════════════════
 
-SH_LOG    = "Trade Log"
-SH_TALLY  = "Volume Tally"
-SH_IMPORT = "Import Log"
+SH_LOG     = "Trade Log"
+SH_TALLY   = "Volume Tally"
+SH_IMPORT  = "Import Log"
+SH_SUMMARY = "Day Summary"
+
+# Freight CC categorisation for Day Summary
+FREIGHT_CLEAN_CC = {"WMJ", "WSN", "WHK", "JFF", "WNX"}
+FREIGHT_DIRTY_CC = {"TDC", "TDL", "WDF"}
+FREIGHT_LPG_CC   = {"WAT", "WFA"}
 
 # Trade Log columns
 # A  Timestamp | B  Trade Type | C  Notes/Flags | D  CC | E  Qty | F  Hub
@@ -685,9 +688,11 @@ LOG_WIDTHS = {
 # E  Cumul. Volume  (running)
 # F  VWAP           (running)
 
-TALLY_COLS   = ["CC × Strip / Spread", "Timestamp", "Qty",
-                 "Price", "Cumul. Volume", "VWAP (running)"]
-TALLY_WIDTHS = {"A": 30, "B": 18, "C": 12, "D": 14, "E": 14, "F": 16}
+TALLY_COLS   = ["CC × Strip / Spread", "Timestamp", "Qty", "Vol Equiv",
+                 "Price", "High", "Low", "Cumul. Vol", "Cumul. Vol Equiv", "VWAP (running)"]
+TALLY_WIDTHS = {"A": 36, "B": 18, "C": 10, "D": 12,
+                 "E": 14, "F": 12, "G": 12, "H": 14, "I": 16, "J": 16}
+TALLY_NUM_COLS = 10  # total column count
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -706,13 +711,20 @@ def build_fresh_workbook(path: str):
 
     wt = wb.create_sheet(SH_TALLY)
     wt.freeze_panes = "A3"
-    wt["A1"] = "Volume Tally  —  per-trade prices · cumulative volume · VWAP"
+    wt["A1"] = "Volume Tally  —  per-trade prices · vol equiv · cumulative volume · VWAP"
     wt["A1"].font      = FN_TITLE
     wt["A1"].alignment = Alignment(horizontal="left", vertical="center")
     wt.row_dimensions[1].height = 28
     _hdr(wt, 2, TALLY_COLS)
     for col, w in TALLY_WIDTHS.items():
         wt.column_dimensions[col].width = w
+
+    ws2 = wb.create_sheet(SH_SUMMARY)
+    ws2.freeze_panes = "A3"
+    ws2["A1"] = "Day Summary  —  Freight volumes by category"
+    ws2["A1"].font      = FN_TITLE
+    ws2["A1"].alignment = Alignment(horizontal="left", vertical="center")
+    ws2.row_dimensions[1].height = 28
 
     wi = wb.create_sheet(SH_IMPORT)
     _hdr(wi, 1, ["Import Time", "Source File", "Raw Rows",
@@ -798,55 +810,72 @@ def _rebuild_tally(wb):
             continue
         ts    = str(row[0] or "")
         tt    = str(row[1] or "")
-        notes = str(row[2] or "")
         cc    = str(row[3] or "")
         qty   = row[4] or 0
-        hub, sp = row[5], row[6]
-        legs = []
+        hub   = str(row[5] or "")
+        sp    = row[6]
+        legs  = []
         for i in range(3):
-            base = 7 + i * 2   # cols H,I then J,K then L,M (0-indexed: 7,8,9,10,11,12)
+            base = 7 + i * 2
             s, p = row[base], row[base + 1]
             if s:
                 legs.append({"strip": s, "price": p})
         all_trades.append({
-            "ts": ts, "tt": tt, "cc": cc,
+            "ts": ts, "tt": tt, "cc": cc, "hub": hub,
             "qty": qty or 0, "sp": sp, "legs": legs,
         })
 
     if not all_trades:
         return
 
-    # ── Build records for two bucket types ────────────────────────────────
-    #
-    #  (a) OUTRIGHT  key = (cc, strip,        "OUTRIGHT")
-    #  (b) SPREAD    key = (cc, "L1 / L2 ...", "SPREAD")   — differential only
-
+    # ── Build buckets ──────────────────────────────────────────────────────
     from collections import defaultdict
-    buckets: dict[tuple, list] = defaultdict(list)
+
+    # key = (cc, strip_label, kind_str)
+    # value = list of {"ts", "qty", "vol_equiv", "price"}
+    buckets:    dict[tuple, list] = defaultdict(list)
+    bucket_hub: dict[tuple, str]  = {}   # cc → hub name
 
     for t in all_trades:
-        cc, qty, legs, tt = t["cc"], t["qty"], t["legs"], t["tt"]
+        cc, qty, legs, tt, hub = (
+            t["cc"], t["qty"], t["legs"], t["tt"], t["hub"])
 
-        if tt == "CANCELLED":
+        if tt == "CANCELLED" or not legs:
             continue
-        if tt in ("OUTRIGHT", "TAPS") and legs:
-            l = legs[0]
-            buckets[(cc, l["strip"], tt)].append(
-                {"ts": t["ts"], "qty": qty, "price": l["price"]})
 
-        elif tt in ("SPREAD", "BUTTERFLY", "CONDOR",
-                    "INTERPRODUCT_SPREAD") and t["sp"] is not None:
+        sm = _strip_multiplier(legs[0].get("strip", ""))
+        if tt in ("BUTTERFLY", "CONDOR"):
+            vol_equiv = qty * sm * 2
+        else:
+            vol_equiv = qty * sm
+
+        if tt in ("OUTRIGHT", "TAPS"):
+            l   = legs[0]
+            key = (cc, l["strip"], tt)
+            buckets[key].append(
+                {"ts": t["ts"], "qty": qty, "vol_equiv": vol_equiv,
+                 "price": l["price"]})
+
+        elif tt in ("SPREAD", "BUTTERFLY", "CONDOR", "INTERPRODUCT_SPREAD"):
+            if t["sp"] is None:
+                continue
             diff_label = " / ".join(
-                l["strip"] for l in sorted(legs, key=lambda l: _strip_sort_key(l["strip"]))
+                l["strip"] for l in sorted(legs,
+                                           key=lambda l: _strip_sort_key(l["strip"]))
             )
-            buckets[(cc, diff_label, tt)].append(
-                {"ts": t["ts"], "qty": qty, "price": t["sp"]})
+            key = (cc, diff_label, tt)
+            buckets[key].append(
+                {"ts": t["ts"], "qty": qty, "vol_equiv": vol_equiv,
+                 "price": t["sp"]})
 
-    # Sort each bucket by timestamp
+        if cc not in bucket_hub and hub:
+            bucket_hub[cc] = hub
+
+    # Sort each bucket chronologically
     for k in buckets:
         buckets[k].sort(key=lambda x: x["ts"])
 
-    # ── Sort keys: CC → kind order → strip label ──────────────────────────
+    # ── Sort keys: CC → kind → strip label ────────────────────────────────
     KIND_ORDER = {"OUTRIGHT": 0, "TAPS": 1, "SPREAD": 2, "BUTTERFLY": 3,
                   "CONDOR": 4, "INTERPRODUCT_SPREAD": 5}
     sorted_keys = sorted(
@@ -862,78 +891,303 @@ def _rebuild_tally(wb):
             c.border = Border()
             c.font   = FN_BODY
 
+    NC = TALLY_NUM_COLS  # 10
+
+    def _tally_row(row_num, vals, aligns, fill, bold=False, height=16):
+        for ci, (val, ha) in enumerate(zip(vals, aligns), 1):
+            _c(wt, row_num, ci, val, fill=fill, halign=ha, bold=bold)
+        wt.row_dimensions[row_num].height = height
+
+    def _banner_row(row_num, text, fill, font, height=22):
+        for ci in range(1, NC + 1):
+            c = wt.cell(row=row_num, column=ci,
+                        value=(text if ci == 1 else None))
+            c.fill      = fill
+            c.font      = font
+            c.border    = BORD
+            c.alignment = Alignment(horizontal="left", vertical="center")
+        wt.row_dimensions[row_num].height = height
+
     # ── Write blocks ──────────────────────────────────────────────────────
-    r        = 3
-    prev_cc  = None
+    r       = 3
+    prev_cc = None
+
+    # Accumulate per-CC strategy subtotals: {cc: {kind: {"vol": N, "vol_equiv": N}}}
+    cc_strategy_vol: dict[str, dict[str, dict]] = defaultdict(
+        lambda: defaultdict(lambda: {"vol": 0, "vol_equiv": 0}))
+
+    RIGHT = {"right"}  # convenience
 
     for key in sorted_keys:
         cc_key, strip_label, kind = key
-        recs      = buckets[key]
+        recs = buckets[key]
         trade_fill = (F_SPREAD if kind in ("SPREAD", "BUTTERFLY", "CONDOR",
-                                             "INTERPRODUCT_SPREAD")
+                                            "INTERPRODUCT_SPREAD")
                       else F_FLAG if kind == "TAPS" else F_OUT)
 
-        # CC banner (new CC)
+        # ── CC banner ──────────────────────────────────────────────────────
         if cc_key != prev_cc:
             if prev_cc is not None:
-                r += 1  # blank spacer row between CCs
-            for ci in range(1, 7):
-                c = wt.cell(row=r, column=ci,
-                             value=(cc_key if ci == 1 else None))
-                c.fill      = F_CC_BAND
-                c.font      = FN_HDR
-                c.border    = BORD
-                c.alignment = Alignment(horizontal="left", vertical="center")
-            wt.row_dimensions[r].height = 22
+                # Strategy subtotals for previous CC
+                _write_strategy_subtotals(wt, r, prev_cc,
+                                          cc_strategy_vol[prev_cc], NC)
+                r += len(cc_strategy_vol[prev_cc]) + 2  # subtotals + blank spacer
+
+            hub_name = bucket_hub.get(cc_key, "")
+            banner   = f"{cc_key}  —  {hub_name}" if hub_name else cc_key
+            _banner_row(r, banner, F_CC_BAND, FN_HDR, height=22)
             r += 1
             prev_cc = cc_key
 
-        # Block sub-header
-        kind_label = {"OUTRIGHT": "Outright", "TAPS": "TAPS / MOC",
-                      "SPREAD": "Spread", "BUTTERFLY": "Butterfly",
-                      "CONDOR": "Condor",
-                      "INTERPRODUCT_SPREAD": "Inter-product Spread"}[kind]
-        block_title = f"{strip_label}  [{kind_label}]"
-
-        for ci in range(1, 7):
-            c = wt.cell(row=r, column=ci,
-                         value=(block_title if ci == 1 else None))
-            c.fill      = F_BLK_HDR
-            c.font      = FN_BOLD
-            c.border    = BORD
-            c.alignment = Alignment(horizontal="left", vertical="center")
-        wt.row_dimensions[r].height = 18
+        # ── Block sub-header ───────────────────────────────────────────────
+        KIND_LABELS = {
+            "OUTRIGHT": "Outright", "TAPS": "TAPS / MOC",
+            "SPREAD": "Spread", "BUTTERFLY": "Butterfly",
+            "CONDOR": "Condor", "INTERPRODUCT_SPREAD": "Inter-product Spread",
+        }
+        block_title = f"{strip_label}  [{KIND_LABELS.get(kind, kind)}]"
+        _banner_row(r, block_title, F_BLK_HDR, FN_BOLD, height=18)
         r += 1
 
-        # Individual trade rows — running cumvol + VWAP
-        cumvol   = 0
-        vwap_num = 0.0
+        # ── Individual trade rows ──────────────────────────────────────────
+        cumvol = cumveq = vwap_num = 0.0
+        hi = lo = None
 
         for i, rec in enumerate(recs):
-            qty_val   = rec["qty"]   or 0
-            price_val = rec["price"] or 0.0
-            cumvol   += qty_val
-            vwap_num += qty_val * price_val
-            running_vwap = round(vwap_num / cumvol, 6) if cumvol else None
+            qty_val   = rec["qty"]      or 0
+            veq_val   = rec["vol_equiv"] or 0
+            price_val = rec["price"]    or 0.0
 
+            cumvol   += qty_val
+            cumveq   += veq_val
+            vwap_num += qty_val * price_val
+
+            if price_val:
+                hi = price_val if hi is None else max(hi, price_val)
+                lo = price_val if lo is None else min(lo, price_val)
+
+            running_vwap = round(vwap_num / cumvol, 6) if cumvol else None
             row_fill = F_TRADE_ALT if i % 2 == 0 else trade_fill
-            vals     = [None, rec["ts"], qty_val, rec["price"],
-                        cumvol, running_vwap]
-            aligns   = ["left", "left", "right", "right", "right", "right"]
-            for ci, (val, ha) in enumerate(zip(vals, aligns), 1):
-                _c(wt, r, ci, val, fill=row_fill, halign=ha)
-            wt.row_dimensions[r].height = 16
+
+            # A=blank, B=ts, C=qty, D=vol_equiv, E=price, F=hi, G=lo,
+            # H=cumvol, I=cumveq, J=vwap
+            vals   = [None, rec["ts"], qty_val, veq_val, rec["price"],
+                      None, None, cumvol, cumveq, running_vwap]
+            aligns = ["left","left","right","right","right",
+                      "right","right","right","right","right"]
+            _tally_row(r, vals, aligns, row_fill, height=16)
             r += 1
 
-        # Summary row
-        final_vwap = round(vwap_num / cumvol, 6) if cumvol else None
-        sum_vals   = ["► Cumul. Vol / VWAP", "", cumvol, "",
-                      cumvol, final_vwap]
-        sum_aligns = ["left", "left", "right", "right", "right", "right"]
-        for ci, (val, ha) in enumerate(zip(sum_vals, sum_aligns), 1):
-            _c(wt, r, ci, val, fill=F_SUMMARY, halign=ha, bold=True)
-        wt.row_dimensions[r].height = 18
+            # Accumulate for strategy subtotals
+            cc_strategy_vol[cc_key][kind]["vol"]      += qty_val
+            cc_strategy_vol[cc_key][kind]["vol_equiv"] += veq_val
+
+        # ── Summary / VWAP row for this block ─────────────────────────────
+        trade_count  = len(recs)
+        final_vwap   = round(vwap_num / cumvol, 6) if cumvol else None
+        count_label  = f"► {trade_count} trade{'s' if trade_count != 1 else ''}  |  Cumul. Vol / VWAP"
+        sum_vals     = [count_label, "", cumvol, cumveq, "",
+                        hi, lo, cumvol, cumveq, final_vwap]
+        sum_aligns   = ["left","left","right","right","right",
+                        "right","right","right","right","right"]
+        _tally_row(r, sum_vals, sum_aligns, F_SUMMARY, bold=True, height=18)
         r += 1
+
+    # ── Final CC strategy subtotals ────────────────────────────────────────
+    if prev_cc is not None:
+        _write_strategy_subtotals(wt, r, prev_cc,
+                                  cc_strategy_vol[prev_cc], NC)
+        r += len(cc_strategy_vol[prev_cc]) + 1
+
+
+def _write_strategy_subtotals(wt, row_start, cc_key, strategy_data, nc):
+    """Write a compact strategy-volume breakdown block below a CC section."""
+    KIND_LABELS = {
+        "OUTRIGHT": "Outright", "TAPS": "TAPS / MOC",
+        "SPREAD": "Spread", "BUTTERFLY": "Butterfly",
+        "CONDOR": "Condor", "INTERPRODUCT_SPREAD": "Inter-product Spread",
+    }
+    r = row_start
+    # Section header
+    for ci in range(1, nc + 1):
+        c = wt.cell(row=r, column=ci,
+                    value=(f"{cc_key}  — Strategy Summary" if ci == 1 else None))
+        c.fill      = F_BLK_HDR
+        c.font      = FN_BOLD
+        c.border    = BORD
+        c.alignment = Alignment(horizontal="left", vertical="center")
+    wt.row_dimensions[r].height = 16
+    r += 1
+
+    for kind, data in strategy_data.items():
+        label = KIND_LABELS.get(kind, kind)
+        vals  = [f"  {label}", "", data["vol"], data["vol_equiv"],
+                 "", "", "", "", "", ""]
+        for ci, val in enumerate(vals, 1):
+            _c(wt, r, ci, val,
+               fill=F_SUMMARY,
+               halign="right" if ci in (3, 4) else "left",
+               bold=False)
+        wt.row_dimensions[r].height = 15
+        r += 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  DAY SUMMARY (Freight)
+# ═══════════════════════════════════════════════════════════════════════════
+
+_ALL_FREIGHT_CC = FREIGHT_CLEAN_CC | FREIGHT_DIRTY_CC | FREIGHT_LPG_CC
+
+_SUMMARY_CATEGORIES = [
+    ("Light Ends",   None),           # None = everything not in freight
+    ("Clean Tanker", FREIGHT_CLEAN_CC),
+    ("Dirty Tanker", FREIGHT_DIRTY_CC),
+    ("LPG",          FREIGHT_LPG_CC),
+]
+
+# A=CC, B=Outright Vol, C=Outright Vol Equiv, D=Spread Vol, E=Spread Vol Equiv,
+# F=Total Vol, G=Total Vol Equiv, H=# Trades
+_SUMMARY_HDR_COLS = [
+    "CC", "Outright Vol", "Outright Vol Eq",
+    "Spread Vol", "Spread Vol Eq",
+    "Total Vol", "Total Vol Eq", "# Trades",
+]
+_SUMMARY_HDR_WIDTHS = {
+    "A": 16, "B": 14, "C": 16,
+    "D": 12, "E": 14,
+    "F": 12, "G": 14, "H": 10,
+}
+
+_OUTRIGHT_TYPES = {"OUTRIGHT", "TAPS"}
+_SPREAD_TYPES   = {"SPREAD", "BUTTERFLY", "CONDOR", "INTERPRODUCT_SPREAD"}
+
+
+def _build_day_summary(wb):
+    """Rebuild the Day Summary sheet: per-CC outright vs spread totals, all products."""
+    ws  = wb[SH_LOG]
+    ws2 = wb[SH_SUMMARY]
+
+    from collections import defaultdict
+
+    def _blank_cc():
+        return {"out_vol": 0.0, "out_veq": 0.0,
+                "spr_vol": 0.0, "spr_veq": 0.0,
+                "trades":  0}
+
+    cc_data: dict[str, dict] = defaultdict(_blank_cc)
+
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if not row[0]:
+            continue
+        tt  = str(row[1] or "")
+        cc  = str(row[3] or "")
+        qty = row[4] or 0
+        legs = []
+        for i in range(3):
+            base = 7 + i * 2
+            s, p = row[base], row[base + 1]
+            if s:
+                legs.append({"strip": s, "price": p})
+
+        if tt == "CANCELLED" or not legs:
+            continue
+
+        sm = _strip_multiplier(legs[0].get("strip", ""))
+        if tt in ("BUTTERFLY", "CONDOR"):
+            vol_equiv = qty * sm * 2
+        else:
+            vol_equiv = qty * sm
+
+        d = cc_data[cc]
+        d["trades"] += 1
+        if tt in _OUTRIGHT_TYPES:
+            d["out_vol"] += qty
+            d["out_veq"] += vol_equiv
+        elif tt in _SPREAD_TYPES:
+            d["spr_vol"] += qty
+            d["spr_veq"] += vol_equiv
+
+    # Clear sheet (row 3+)
+    for rw in ws2.iter_rows(min_row=3):
+        for c in rw:
+            c.value  = None
+            c.fill   = F_OUT
+            c.border = Border()
+            c.font   = FN_BODY
+
+    _hdr(ws2, 2, _SUMMARY_HDR_COLS)
+    for col, w in _SUMMARY_HDR_WIDTHS.items():
+        ws2.column_dimensions[col].width = w
+
+    r  = 3
+    nc = len(_SUMMARY_HDR_COLS)
+
+    def _sum_cell(row_num, vals, fill, bold=False, height=16):
+        aligns = ["left"] + ["right"] * (nc - 1)
+        for ci, (val, ha) in enumerate(zip(vals, aligns), 1):
+            _c(ws2, row_num, ci, val, fill=fill, halign=ha, bold=bold)
+        ws2.row_dimensions[row_num].height = height
+
+    def _banner(row_num, text, height=20):
+        for ci in range(1, nc + 1):
+            c = ws2.cell(row=row_num, column=ci,
+                         value=(text if ci == 1 else None))
+            c.fill      = F_CC_BAND
+            c.font      = FN_HDR
+            c.border    = BORD
+            c.alignment = Alignment(horizontal="left", vertical="center")
+        ws2.row_dimensions[row_num].height = height
+
+    grand = _blank_cc()
+
+    for cat_name, cat_ccs in _SUMMARY_CATEGORIES:
+        # Determine which CCs belong to this category
+        if cat_ccs is None:
+            ccs_in_cat = sorted(cc for cc in cc_data if cc not in _ALL_FREIGHT_CC)
+        else:
+            ccs_in_cat = sorted(cc for cc in cat_ccs if cc in cc_data)
+
+        if not ccs_in_cat:
+            continue
+
+        _banner(r, cat_name)
+        r += 1
+
+        cat = _blank_cc()
+
+        for cc in ccs_in_cat:
+            d = cc_data[cc]
+            tot_vol = d["out_vol"] + d["spr_vol"]
+            tot_veq = d["out_veq"] + d["spr_veq"]
+            _sum_cell(r, [cc,
+                          d["out_vol"] or None, d["out_veq"] or None,
+                          d["spr_vol"] or None, d["spr_veq"] or None,
+                          tot_vol, tot_veq, d["trades"]],
+                      F_OUT, height=16)
+            r += 1
+            for k in ("out_vol", "out_veq", "spr_vol", "spr_veq", "trades"):
+                cat[k] += d[k]
+
+        cat_tot_vol = cat["out_vol"] + cat["spr_vol"]
+        cat_tot_veq = cat["out_veq"] + cat["spr_veq"]
+        _sum_cell(r, [f"  Total {cat_name}",
+                      cat["out_vol"] or None, cat["out_veq"] or None,
+                      cat["spr_vol"] or None, cat["spr_veq"] or None,
+                      cat_tot_vol, cat_tot_veq, int(cat["trades"])],
+                  F_SUMMARY, bold=True, height=18)
+        r += 2
+
+        for k in ("out_vol", "out_veq", "spr_vol", "spr_veq", "trades"):
+            grand[k] += cat[k]
+
+    # Grand Total
+    gt_vol = grand["out_vol"] + grand["spr_vol"]
+    gt_veq = grand["out_veq"] + grand["spr_veq"]
+    _sum_cell(r, ["  GRAND TOTAL",
+                  grand["out_vol"] or None, grand["out_veq"] or None,
+                  grand["spr_vol"] or None, grand["spr_veq"] or None,
+                  gt_vol, gt_veq, int(grand["trades"])],
+              F_CC_BAND, bold=True, height=22)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -946,6 +1200,15 @@ def append_trades(path: str, trades: list[dict],
     wb = load_workbook(path)
     ws = wb[SH_LOG]
     wi = wb[SH_IMPORT]
+
+    # Ensure Day Summary sheet exists (for workbooks created before this feature)
+    if SH_SUMMARY not in wb.sheetnames:
+        ws2 = wb.create_sheet(SH_SUMMARY)
+        ws2.freeze_panes = "A3"
+        ws2["A1"] = "Day Summary  —  Freight volumes by category"
+        ws2["A1"].font      = FN_TITLE
+        ws2["A1"].alignment = Alignment(horizontal="left", vertical="center")
+        ws2.row_dimensions[1].height = 28
 
     new_count  = 0
     skip_count = 0
@@ -963,6 +1226,7 @@ def append_trades(path: str, trades: list[dict],
         new_count += 1
 
     _rebuild_tally(wb)
+    _build_day_summary(wb)
 
     log_r = wi.max_row + 1
     for ci, val in enumerate([

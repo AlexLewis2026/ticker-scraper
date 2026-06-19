@@ -92,7 +92,10 @@ HUB_CC_MAP: dict[str, str] = {
     "argus eurobob oxy fob rdam bg/brent 1st line":                    "EOB",
 
     # ── Premium Unl 10ppm FOB Med ─────────────────────────────────────────────
-    "premium unl 10ppm fob med cg (platts) mini":                     "UCD",
+    # GCZ = outright (Mini, Platts); UCD = balmo of same hub (CC always explicit)
+    "premium unl 10ppm fob med cg (platts) mini":                     "GCZ",
+    # UCB = full-size (no Mini, no Platts qualifier)
+    "premium unl 10ppm fob med cg":                                   "UCB",
 
     # ── Argus Eurobob / Naphtha interproduct diffs ───────────────────────────
     "argus eurobob oxy fob rdam bg/naphtha cif nwe cg":                "EON",
@@ -118,6 +121,27 @@ HUB_CC_MAP: dict[str, str] = {
 
     # ── Conway ────────────────────────────────────────────────────────────────
     "conway":                                                          "PRC",
+
+    # ══ FREIGHT ═══════════════════════════════════════════════════════════════
+
+    # ── Dirty freight ─────────────────────────────────────────────────────────
+    "td20":                                                            "TDC",
+    "td3c":                                                            "TDL",
+    "usgc-uk continent (dirty)":                                       "WDF",
+
+    # ── Clean freight ─────────────────────────────────────────────────────────
+    "tc5":                                                             "WMJ",
+    "tc6":                                                             "WSN",
+    "tc14":                                                            "WHK",
+    "tc17":                                                            "JFF",
+
+    # ── LPG freight ───────────────────────────────────────────────────────────
+    # WAT = LPG (BLPG) FFA Middle East Gulf to East 44,000Mts (Baltic) Future
+    # Blotter has a coding error showing "LGP" instead of "LPG" for WAT — both mapped.
+    "lgp (blpg)":                                                      "WAT",   # blotter typo
+    "lpg (blpg)":                                                      "WAT",   # correct name
+    "lpg (blpg3)":                                                     "WFA",
+    "lgp (blpg3)":                                                     "WFA",   # blotter typo variant
 }
 
 
