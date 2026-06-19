@@ -112,7 +112,7 @@ TAPS_CUTOFF = "09:30:00"
 
 # Exact prices that trigger TAPS classification, per CC group.
 # Prices are rounded to 3 d.p. before comparison to absorb OCR float noise.
-_SM_TAPS_PRICES = {-0.020, -0.010, 0.000, +0.010, +0.020}
+_SM_TAPS_PRICES = {-0.020, -0.015, -0.010, -0.005, 0.000, +0.005, +0.010, +0.015, +0.020}
 _NJ_TAPS_PRICES = {-0.100, -0.050, 0.000, +0.050, +0.100}
 
 TAPS_GROUPS = {

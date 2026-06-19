@@ -124,11 +124,12 @@ class TestParseLine:
         assert row["is_diff_row"] is True
         assert row["strip"] == "Mar27/Apr27"
 
-    def test_diff_row_large_price_not_flagged(self):
+    def test_diff_row_large_price_flagged(self):
+        # A 2-part slash strip is always a spread diff, regardless of price magnitude.
         line = "12:54:02 BST NJC 5 Aug26/Sep26 Naphtha C&F Japan Cg 500.00 © BLK"
         row = _parse_line(line)
         assert row is not None
-        assert row["is_diff_row"] is False
+        assert row["is_diff_row"] is True
 
     def test_negative_price(self):
         line = "13:04:42 BST NBP 20 Aug26 Naphtha CIF NWE Cg -12.25 © BLK"

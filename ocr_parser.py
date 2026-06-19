@@ -148,6 +148,8 @@ def _is_strip_token(tok: str) -> bool:
         return True
     if re.match(r"^Cal\s+\d{2}$", tok):                   # "Cal 27" (pre-joined)
         return True
+    if re.match(r"^Bal\s+Month(?:-[A-Za-z]+)?$", tok, re.IGNORECASE):  # "Bal Month", "Bal Month-ND"
+        return True
     return bool(_STRIP_TOKEN_RE.match(tok))
 
 
@@ -316,6 +318,8 @@ def _parse_line(line: str) -> dict | None:
             tokens      = tokens[i + 2:]
             if CC_PATTERN.match(remainder):
                 pass   # e.g. "5NJC" → CC already found
+            elif remainder.lower() in ("spread", "fly"):
+                strategy = remainder.lower()   # "5spread" OCR merge
             else:
                 strip_tokens = [remainder]
             found_cc_qty = True
@@ -330,6 +334,9 @@ def _parse_line(line: str) -> dict | None:
             remainder = sm.group(2)
             if CC_PATTERN.match(remainder):
                 cc     = remainder
+                tokens = tokens[1:]
+            elif remainder.lower() in ("spread", "fly"):
+                strategy = remainder.lower()
                 tokens = tokens[1:]
             else:
                 strip_tokens = [remainder]
@@ -424,8 +431,13 @@ def _parse_line(line: str) -> dict | None:
     # 8. Diff / fly row detection:
     #    "spread" strategy → spread diff row.
     #    "fly"    strategy → butterfly diff row.
-    #    Heuristic fallback for old format (strip has "/" and price is small).
-    is_diff = bool(strategy) or ("/" in strip and abs(price) < 100)
+    #    Fallback: 2-part slash strip whose both parts are valid strip tokens
+    #    (catches crack spreads with large prices like 185.5 where old <100 check fails).
+    def _two_part_spread(s: str) -> bool:
+        parts = s.split("/")
+        return len(parts) == 2 and all(_is_strip_token(p.strip()) for p in parts)
+
+    is_diff = bool(strategy) or _two_part_spread(strip)
 
     return {
         "timestamp":   timestamp,

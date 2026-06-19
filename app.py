@@ -15,6 +15,7 @@ from trade_accumulator_v4 import (
     append_trades,
     build_fresh_workbook,
     group_rows_into_trades,
+    _strip_sort_key,
 )
 from ocr_parser import parse_image_local, ocr_raw_text
 from openpyxl import load_workbook
@@ -980,7 +981,9 @@ def _compute_tally():
                 {"ts": ts, "qty": qty, "price": float(l["price"])})
         elif tt in ("SPREAD", "BUTTERFLY", "CONDOR",
                     "INTERPRODUCT_SPREAD") and sp is not None:
-            diff_label = " / ".join(l["strip"] for l in legs)
+            diff_label = " / ".join(
+                l["strip"] for l in sorted(legs, key=lambda l: _strip_sort_key(l["strip"]))
+            )
             buckets[(cc, diff_label, tt)].append(
                 {"ts": ts, "qty": qty, "price": float(sp)})
 
