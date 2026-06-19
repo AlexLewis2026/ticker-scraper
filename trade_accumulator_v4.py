@@ -764,7 +764,7 @@ def _write_log_row(ws, t: dict, source_file: str):
     ws.row_dimensions[r].height = 17
 
     def leg(i, field):
-        return legs[i][field] if i < len(legs) else None
+        return legs[i].get(field) if i < len(legs) else None
 
     vals = [
         t["timestamp"], tt, note, t["cc"], t["qty"], t.get("hub", ""),
@@ -836,7 +836,9 @@ def _rebuild_tally(wb):
 
         elif tt in ("SPREAD", "BUTTERFLY", "CONDOR",
                     "INTERPRODUCT_SPREAD") and t["sp"] is not None:
-            diff_label = " / ".join(l["strip"] for l in legs)
+            diff_label = " / ".join(
+                l["strip"] for l in sorted(legs, key=lambda l: _strip_sort_key(l["strip"]))
+            )
             buckets[(cc, diff_label, tt)].append(
                 {"ts": t["ts"], "qty": qty, "price": t["sp"]})
 

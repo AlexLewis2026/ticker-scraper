@@ -1169,7 +1169,7 @@ def log():
         rows = []
         for t in trades:
             legs = t.get("legs", [])
-            def leg(i, f): return legs[i][f] if i < len(legs) else None
+            def leg(i, f): return legs[i].get(f) if i < len(legs) else None
             rows.append([
                 t.get("timestamp"), t.get("trade_type"), t.get("notes"),
                 t.get("cc"), t.get("qty"), t.get("hub"), t.get("spread_price"),

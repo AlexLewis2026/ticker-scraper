@@ -87,8 +87,20 @@ HUB_CC_MAP: dict[str, str] = {
     # ── Argus Eurobob ─────────────────────────────────────────────────────────
     "argus eurobob oxy fob rdam bg":                                   "AEO",
     "argus eurobob oxy fob rdam bg mini":                              "AOM",
-    # Crack / Brent spread  (AEB = crack futures, NOT balmo)
+    # Crack / Brent spread  (AEB = barrels, EOB = metric tonnes)
     "argus eurobob oxy fob rdam bg/brent 1st line (bbl)":              "AEB",
+    "argus eurobob oxy fob rdam bg/brent 1st line":                    "EOB",
+
+    # ── Premium Unl 10ppm FOB Med ─────────────────────────────────────────────
+    "premium unl 10ppm fob med cg (platts) mini":                     "UCD",
+
+    # ── Argus Eurobob / Naphtha interproduct diffs ───────────────────────────
+    "argus eurobob oxy fob rdam bg/naphtha cif nwe cg":                "EON",
+    "argus eurobob oxy fob rdam bg/naphtha cif nwe cg mini":           "EOO",
+
+    # ── Sing Mogas interproduct diffs ─────────────────────────────────────────
+    "sing mogas 92 unl (platts)/argus eurobob oxy fob rdam bg":        "GDK",
+    "sing mogas 92 unl/naphtha c+f japan cg (platts)":                 "SMJ",
 
     # ── RBOB / Gasoline diff ──────────────────────────────────────────────────
     "rbob 1st line/argus eurobob oxy fob rdam bg mini":                "GDQ",
@@ -128,9 +140,13 @@ def _hub_to_cc(hub: str) -> str:
 
 def _is_strip_token(tok: str) -> bool:
     """Return True if this token is part of a strip/spread designation."""
-    if "/" in tok and re.search(r"\d{2}$", tok):   # spread: Jul26/Aug26
+    if "/" in tok and re.search(r"\d{2}$", tok):          # Jul26/Aug26, Q1 27/Q2 27
         return True
-    if _STRIP_RANGE_RE.match(tok):                  # range:  Mar27-Jun27
+    if _STRIP_RANGE_RE.match(tok):                         # Mar27-Jun27
+        return True
+    if re.match(r"^Q[1-4]\s+\d{2}$", tok):                # "Q1 27" (pre-joined)
+        return True
+    if re.match(r"^Cal\s+\d{2}$", tok):                   # "Cal 27" (pre-joined)
         return True
     return bool(_STRIP_TOKEN_RE.match(tok))
 
@@ -212,11 +228,15 @@ def _parse_line(line: str) -> dict | None:
         left  = rest[: bm.start()].rstrip()
         right = rest[bm.end() :].strip()
 
-        # Right side: last token is TT code; everything before it is hub (new format).
+        # Right side: last alpha token is the TT code; everything before it is hub.
+        # Strip non-alpha wrapping (e.g. "(CANCELLED)") from the last token.
         right_toks = right.split()
-        if right_toks and re.match(r"^[A-Za-z]{2,}$", right_toks[-1]):
-            tt_code    = right_toks[-1].lower()
-            hub_right  = " ".join(right_toks[:-1])
+        if not right_toks:
+            return None
+        last_clean = re.sub(r"[^A-Za-z]", "", right_toks[-1])
+        if len(last_clean) >= 2:
+            tt_code   = last_clean.lower()
+            hub_right = " ".join(right_toks[:-1])
         else:
             return None
 
@@ -351,6 +371,35 @@ def _parse_line(line: str) -> dict | None:
     if tokens and tokens[0].lower() in ("spread", "fly"):
         strategy = tokens[0].lower()
         tokens   = tokens[1:]
+
+    # 5b. Pre-join quarter tokens split across spaces.
+    #   "Q1" "27/Q2" "27"  →  "Q1 27/Q2 27"   (quarter spread)
+    #   "Q1" "27"          →  "Q1 27"           (single quarter)
+    _merged: list[str] = []
+    _ti = 0
+    while _ti < len(tokens):
+        _tok = tokens[_ti]
+        if re.match(r"^Q[1-4]$", _tok):
+            # Try to consume quarter spread: Q1 27/Q2 27 (tokens: Q1, 27/Q2, 27)
+            if (_ti + 2 < len(tokens)
+                    and re.match(r"^\d{2}/Q[1-4]$", tokens[_ti + 1])
+                    and re.match(r"^\d{2}$", tokens[_ti + 2])):
+                _merged.append(_tok + " " + tokens[_ti+1] + " " + tokens[_ti+2])
+                _ti += 3
+                continue
+            # Simple quarter + year: Q1 27
+            if _ti + 1 < len(tokens) and re.match(r"^\d{2}$", tokens[_ti + 1]):
+                _merged.append(_tok + " " + tokens[_ti + 1])
+                _ti += 2
+                continue
+        # Cal YY → "Cal 27"
+        if _tok == "Cal" and _ti + 1 < len(tokens) and re.match(r"^\d{2}$", tokens[_ti + 1]):
+            _merged.append(_tok + " " + tokens[_ti + 1])
+            _ti += 2
+            continue
+        _merged.append(_tok)
+        _ti += 1
+    tokens = _merged
 
     # 6. Strip: consume tokens that match strip patterns.
     hub_start = len(tokens)
