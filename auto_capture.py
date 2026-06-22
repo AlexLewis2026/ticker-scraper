@@ -155,6 +155,30 @@ def run_once(window_title: str, url: str) -> bool:
     return post_to_parser(png, url, label)
 
 
+def replay_snapshots(url: str, snapshot_dir: Path):
+    """Re-parse every PNG in snapshot_dir in chronological order."""
+    if not snapshot_dir.exists():
+        log.error("Snapshot directory '%s' does not exist.", snapshot_dir)
+        return
+
+    snapshots = sorted(snapshot_dir.glob("*.png"))
+    if not snapshots:
+        log.warning("No snapshots found in '%s'.", snapshot_dir)
+        return
+
+    log.info("Replaying %d snapshot(s) from '%s'", len(snapshots), snapshot_dir)
+    ok = fail = 0
+    for path in snapshots:
+        log.info("  → %s", path.name)
+        png = path.read_bytes()
+        if post_to_parser(png, url, path.stem):
+            ok += 1
+        else:
+            fail += 1
+
+    log.info("Replay complete — OK: %d  Failed: %d", ok, fail)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Auto-capture Light Ends ticker and parse")
     ap.add_argument("--window",   default=DEFAULT_WINDOW,
@@ -165,6 +189,10 @@ def main():
                     help=f"Flask parse endpoint (default: {DEFAULT_URL})")
     ap.add_argument("--once",     action="store_true",
                     help="Capture once and exit")
+    ap.add_argument("--replay",   action="store_true",
+                    help="Re-parse all saved snapshots in chronological order then exit")
+    ap.add_argument("--replay-dir", default=str(SNAPSHOT_DIR),
+                    help=f"Folder to replay from (default: {SNAPSHOT_DIR})")
     args = ap.parse_args()
 
     log.info("═" * 55)
@@ -174,6 +202,10 @@ def main():
     log.info("  Endpoint : %s", args.url)
     log.info("  Snapshots: %s", SNAPSHOT_DIR or "disabled")
     log.info("═" * 55)
+
+    if args.replay:
+        replay_snapshots(args.url, Path(args.replay_dir))
+        return
 
     if args.once:
         run_once(args.window, args.url)
