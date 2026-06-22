@@ -101,6 +101,9 @@ HUB_CC_MAP: dict[str, str] = {
     "argus eurobob oxy fob rdam bg/naphtha cif nwe cg":                "EON",
     "argus eurobob oxy fob rdam bg/naphtha cif nwe cg mini":           "EOO",
 
+    # ── Med Gasoline / Eurobob diff ──────────────────────────────────────────
+    "premium unl 10ppm fob med cg (platts)/argus eurobob oxy fob rdam bg": "GDE",
+
     # ── Sing Mogas interproduct diffs ─────────────────────────────────────────
     "sing mogas 92 unl (platts)/argus eurobob oxy fob rdam bg":        "GDK",
     "sing mogas 92 unl/naphtha c+f japan cg (platts)":                 "SMJ",

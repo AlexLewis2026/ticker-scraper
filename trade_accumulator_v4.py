@@ -195,6 +195,44 @@ def _strip_sort_key(strip: str) -> tuple:
     return (9, 99, 99)
 
 
+# ── Contract lot sizes and display units ────────────────────────────────────────
+# (lot_size, display_unit)  — display_unit is what the Vol Equiv column shows
+CC_LOT: dict[str, tuple[int, str]] = {
+    "AEB": (1_000, "bbl"),
+    "AEN": (100,   "MT"),
+    "AEO": (1_000, "MT"),
+    "AOM": (100,   "MT"),
+    "EOB": (1_000, "bbl"),  # traded MT, displayed bbl (×8.33 below)
+    "EON": (1_000, "MT"),
+    "EOO": (100,   "MT"),
+    "GCZ": (100,   "MT"),
+    "GDA": (100,   "MT"),
+    "GDE": (1_000, "MT"),
+    "GDK": (1_000, "bbl"),
+    "GDO": (1_000, "MT"),
+    "GDQ": (100,   "MT"),
+    "NAM": (100,   "MT"),
+    "NBB": (1_000, "bbl"),
+    "NEC": (1_000, "MT"),
+    "NEH": (1_000, "MT"),
+    "NJC": (1_000, "MT"),
+    "NJD": (1_000, "MT"),
+    "NOB": (1_000, "bbl"),  # traded MT, displayed bbl (×8.90 below)
+    "SMD": (1_000, "bbl"),
+    "SMF": (1_000, "bbl"),
+    "SMJ": (1_000, "bbl"),
+    "SMT": (1_000, "bbl"),
+    "SMV": (100,   "bbl"),
+    "STB": (1_000, "bbl"),
+    "UCB": (1_000, "MT"),
+}
+
+# Contracts traded in MT but quoted/displayed in bbl: multiply MT vol by this factor
+CC_MT_TO_BBL: dict[str, float] = {
+    "EOB": 8.33,
+    "NOB": 8.90,
+}
+
 # ── Strip-range month counter ───────────────────────────────────────────────────
 _RANGE_RE = re.compile(r"^([A-Za-z]{3})(\d{2})-([A-Za-z]{3})(\d{2})$")
 
@@ -217,6 +255,23 @@ def _strip_multiplier(strip: str) -> int:
         yr1  = int(m.group(4))
         return max(1, (yr1 - yr0) * 12 + (mon1 - mon0) + 1)
     return 1
+
+
+def _vol_equiv(cc: str, qty: float, strip: str, tt: str) -> tuple[float, str]:
+    """
+    Return (vol_equiv, unit) for a trade.
+    vol_equiv = qty × lot_size × strip_mult [× MT→bbl factor if applicable]
+                × 2 for BUTTERFLY / CONDOR
+    """
+    lot_size, unit = CC_LOT.get(cc, (1, "lot"))
+    sm = _strip_multiplier(strip)
+    if tt in ("BUTTERFLY", "CONDOR"):
+        sm *= 2
+    veq = qty * lot_size * sm
+    if cc in CC_MT_TO_BBL:
+        veq  = veq * CC_MT_TO_BBL[cc]
+        unit = "bbl"
+    return round(veq, 2), unit
 
 
 def _volume_multiplier(trade: dict) -> int:
@@ -843,17 +898,14 @@ def _rebuild_tally(wb):
         if tt == "CANCELLED" or not legs:
             continue
 
-        sm = _strip_multiplier(legs[0].get("strip", ""))
-        if tt in ("BUTTERFLY", "CONDOR"):
-            vol_equiv = qty * sm * 2
-        else:
-            vol_equiv = qty * sm
+        strip0 = legs[0].get("strip", "")
+        veq, unit = _vol_equiv(cc, qty, strip0, tt)
 
         if tt in ("OUTRIGHT", "TAPS"):
             l   = legs[0]
             key = (cc, l["strip"], tt)
             buckets[key].append(
-                {"ts": t["ts"], "qty": qty, "vol_equiv": vol_equiv,
+                {"ts": t["ts"], "qty": qty, "vol_equiv": veq,
                  "price": l["price"]})
 
         elif tt in ("SPREAD", "BUTTERFLY", "CONDOR", "INTERPRODUCT_SPREAD"):
@@ -865,7 +917,7 @@ def _rebuild_tally(wb):
             )
             key = (cc, diff_label, tt)
             buckets[key].append(
-                {"ts": t["ts"], "qty": qty, "vol_equiv": vol_equiv,
+                {"ts": t["ts"], "qty": qty, "vol_equiv": veq,
                  "price": t["sp"]})
 
         if cc not in bucket_hub and hub:
@@ -934,7 +986,10 @@ def _rebuild_tally(wb):
                 r += len(cc_strategy_vol[prev_cc]) + 2  # subtotals + blank spacer
 
             hub_name = bucket_hub.get(cc_key, "")
-            banner   = f"{cc_key}  —  {hub_name}" if hub_name else cc_key
+            _, unit  = CC_LOT.get(cc_key, (1, "lot"))
+            if cc_key in CC_MT_TO_BBL:
+                unit = "bbl"
+            banner   = f"{cc_key}  —  {hub_name}  ({unit})" if hub_name else f"{cc_key}  ({unit})"
             _banner_row(r, banner, F_CC_BAND, FN_HDR, height=22)
             r += 1
             prev_cc = cc_key
@@ -1045,17 +1100,16 @@ _SUMMARY_CATEGORIES = [
     ("LPG",          FREIGHT_LPG_CC),
 ]
 
-# A=CC, B=Outright Vol, C=Outright Vol Equiv, D=Spread Vol, E=Spread Vol Equiv,
-# F=Total Vol, G=Total Vol Equiv, H=# Trades
+# A=CC, B=Unit, C=Outright Vol, D=Outright Vol Equiv, E=Spread Vol, F=Spread Vol Equiv,
+# G=Total Vol, H=Total Vol Equiv, I=# Trades
 _SUMMARY_HDR_COLS = [
-    "CC", "Outright Vol", "Outright Vol Eq",
+    "CC", "Unit", "Outright Vol", "Outright Vol Eq",
     "Spread Vol", "Spread Vol Eq",
     "Total Vol", "Total Vol Eq", "# Trades",
 ]
 _SUMMARY_HDR_WIDTHS = {
-    "A": 16, "B": 14, "C": 16,
-    "D": 12, "E": 14,
-    "F": 12, "G": 14, "H": 10,
+    "A": 14, "B": 8,  "C": 14, "D": 16,
+    "E": 12, "F": 14, "G": 12, "H": 14, "I": 10,
 }
 
 _OUTRIGHT_TYPES = {"OUTRIGHT", "TAPS"}
@@ -1072,7 +1126,7 @@ def _build_day_summary(wb):
     def _blank_cc():
         return {"out_vol": 0.0, "out_veq": 0.0,
                 "spr_vol": 0.0, "spr_veq": 0.0,
-                "trades":  0}
+                "trades":  0,   "unit": ""}
 
     cc_data: dict[str, dict] = defaultdict(_blank_cc)
 
@@ -1092,20 +1146,18 @@ def _build_day_summary(wb):
         if tt == "CANCELLED" or not legs:
             continue
 
-        sm = _strip_multiplier(legs[0].get("strip", ""))
-        if tt in ("BUTTERFLY", "CONDOR"):
-            vol_equiv = qty * sm * 2
-        else:
-            vol_equiv = qty * sm
+        strip0 = legs[0].get("strip", "")
+        veq, unit = _vol_equiv(cc, qty, strip0, tt)
 
         d = cc_data[cc]
         d["trades"] += 1
+        d["unit"]    = unit
         if tt in _OUTRIGHT_TYPES:
             d["out_vol"] += qty
-            d["out_veq"] += vol_equiv
+            d["out_veq"] += veq
         elif tt in _SPREAD_TYPES:
             d["spr_vol"] += qty
-            d["spr_veq"] += vol_equiv
+            d["spr_veq"] += veq
 
     # Clear sheet (row 3+)
     for rw in ws2.iter_rows(min_row=3):
@@ -1154,12 +1206,15 @@ def _build_day_summary(wb):
         r += 1
 
         cat = _blank_cc()
+        units_seen: set[str] = set()
 
         for cc in ccs_in_cat:
             d = cc_data[cc]
             tot_vol = d["out_vol"] + d["spr_vol"]
             tot_veq = d["out_veq"] + d["spr_veq"]
-            _sum_cell(r, [cc,
+            unit    = d["unit"]
+            units_seen.add(unit)
+            _sum_cell(r, [cc, unit,
                           d["out_vol"] or None, d["out_veq"] or None,
                           d["spr_vol"] or None, d["spr_veq"] or None,
                           tot_vol, tot_veq, d["trades"]],
@@ -1170,7 +1225,8 @@ def _build_day_summary(wb):
 
         cat_tot_vol = cat["out_vol"] + cat["spr_vol"]
         cat_tot_veq = cat["out_veq"] + cat["spr_veq"]
-        _sum_cell(r, [f"  Total {cat_name}",
+        cat_unit = next(iter(units_seen)) if len(units_seen) == 1 else "mixed"
+        _sum_cell(r, [f"  Total {cat_name}", cat_unit,
                       cat["out_vol"] or None, cat["out_veq"] or None,
                       cat["spr_vol"] or None, cat["spr_veq"] or None,
                       cat_tot_vol, cat_tot_veq, int(cat["trades"])],
@@ -1180,13 +1236,12 @@ def _build_day_summary(wb):
         for k in ("out_vol", "out_veq", "spr_vol", "spr_veq", "trades"):
             grand[k] += cat[k]
 
-    # Grand Total
+    # Grand Total — units are mixed, omit vol equiv totals
     gt_vol = grand["out_vol"] + grand["spr_vol"]
-    gt_veq = grand["out_veq"] + grand["spr_veq"]
-    _sum_cell(r, ["  GRAND TOTAL",
-                  grand["out_vol"] or None, grand["out_veq"] or None,
-                  grand["spr_vol"] or None, grand["spr_veq"] or None,
-                  gt_vol, gt_veq, int(grand["trades"])],
+    _sum_cell(r, ["  GRAND TOTAL", "mixed",
+                  grand["out_vol"] or None, "—",
+                  grand["spr_vol"] or None, "—",
+                  gt_vol, "—", int(grand["trades"])],
               F_CC_BAND, bold=True, height=22)
 
 

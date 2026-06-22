@@ -4,3 +4,5 @@ pandas>=2.0
 pillow>=10.0
 pytesseract>=0.3.13
 pytest>=9.0
+pygetwindow>=0.0.9
+requests>=2.31
