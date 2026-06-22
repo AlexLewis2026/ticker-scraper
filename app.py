@@ -691,7 +691,7 @@ async function saveTrades() {
       body: JSON.stringify({
         trades:    parsedTrades,
         raw_count: parsedTrades.length,
-        filename:  imageFile.name,
+        filename:  imageFile ? imageFile.name : 'auto-capture',
         import_id: currentImport,
       }),
     });
