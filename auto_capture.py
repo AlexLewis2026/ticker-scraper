@@ -32,7 +32,7 @@ logging.basicConfig(
     format="%(asctime)s  %(levelname)-7s  %(message)s",
     datefmt="%H:%M:%S",
     handlers=[
-        logging.StreamHandler(sys.stdout),
+        logging.StreamHandler(io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")),
         logging.FileHandler("auto_capture.log", encoding="utf-8"),
     ],
 )
@@ -66,24 +66,35 @@ def find_window(title_fragment: str):
 
 def capture_window(win) -> bytes | None:
     """Capture the given window and return PNG bytes, or None on failure."""
-    from PIL import ImageGrab
+    import mss
+    from PIL import Image
 
     try:
         # Bring window to foreground so it isn't obscured
-        if win.isMinimized:
-            win.restore()
-        win.activate()
+        try:
+            if win.isMinimized:
+                win.restore()
+            win.activate()
+        except Exception:
+            # Fallback: use ctypes directly
+            import ctypes
+            hwnd = win._hWnd
+            ctypes.windll.user32.ShowWindow(hwnd, 9)       # SW_RESTORE
+            ctypes.windll.user32.SetForegroundWindow(hwnd)
         time.sleep(0.4)   # allow window to fully paint
 
-        left, top, right, bottom = (
-            win.left, win.top,
-            win.left + win.width,
-            win.top  + win.height,
-        )
-        img = ImageGrab.grab(bbox=(left, top, right, bottom), all_screens=True)
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        return buf.getvalue()
+        monitor = {
+            "left":   win.left,
+            "top":    win.top,
+            "width":  win.width,
+            "height": win.height,
+        }
+        with mss.MSS() as sct:
+            shot = sct.grab(monitor)
+            img  = Image.frombytes("RGB", shot.size, shot.rgb)
+            buf  = io.BytesIO()
+            img.save(buf, format="PNG")
+            return buf.getvalue()
 
     except Exception as exc:
         log.error("Capture failed: %s", exc)
@@ -112,10 +123,10 @@ def post_to_parser(png_bytes: bytes, url: str, source_label: str) -> bool:
         )
         data = resp.json()
         if resp.status_code == 200:
-            new   = data.get("new_trades",  "?")
-            skip  = data.get("skipped",     "?")
-            total = data.get("total_trades", "?")
-            log.info("Parsed OK — new: %s  skipped: %s  total: %s", new, skip, total)
+            new   = data.get("new_count",  "?")
+            skip  = data.get("dup_count",  "?")
+            total = data.get("raw_count",  "?")
+            log.info("Parsed OK — new: %s  skipped: %s  raw rows: %s", new, skip, total)
             return True
         else:
             log.warning("Parser returned %s: %s", resp.status_code,
