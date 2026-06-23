@@ -256,19 +256,19 @@ CC_LOT: dict[str, tuple[int, str]] = {
     "SMV": (100,   "bbl"),
     "STB": (1_000, "bbl"),
     "UCB": (1_000, "MT"),
-    # ── Freight (1 lot = 1 unit for vol equiv purposes) ──────────────────
-    "JFF": (1, "lot"),
-    "TDC": (1, "lot"),
-    "TDA": (1, "lot"),
-    "TDL": (1, "lot"),
-    "WAT": (1, "lot"),
-    "WDF": (1, "lot"),
-    "WFA": (1, "lot"),
-    "WHK": (1, "lot"),
-    "WMJ": (1, "lot"),
-    "WNS": (1, "lot"),
-    "WNX": (1, "lot"),
-    "WSN": (1, "lot"),
+    # ── Freight (1 lot = 1,000 MT; per-trade Full Total in MT) ───────────
+    "JFF": (1_000, "MT"),
+    "TDC": (1_000, "MT"),
+    "TDA": (1_000, "MT"),
+    "TDL": (1_000, "MT"),
+    "WAT": (1_000, "MT"),
+    "WDF": (1_000, "MT"),
+    "WFA": (1_000, "MT"),
+    "WHK": (1_000, "MT"),
+    "WMJ": (1_000, "MT"),
+    "WNS": (1_000, "MT"),
+    "WNX": (1_000, "MT"),
+    "WSN": (1_000, "MT"),
 }
 
 # Contracts traded in MT but quoted/displayed in bbl: multiply MT vol by this factor
@@ -1187,8 +1187,8 @@ def _write_strategy_subtotals(wt, row_start, cc_key, strategy_data, nc):
         "SPREAD": "Spread", "BUTTERFLY": "Butterfly",
         "CONDOR": "Condor", "INTERPRODUCT_SPREAD": "Inter-product Spread",
     }
-    _HDR_VALS = {1: f"{cc_key}  — Strategy Summary", 3: "Vol (lots)",
-                 4: "Full Total", 5: "Commission ($)"}
+    _HDR_VALS = {1: f"{cc_key}  — Strategy Summary", 3: "Qty (lots)",
+                 4: "Full Total (KT)", 5: "Commission ($)"}
     r = row_start
     # Section header
     for ci in range(1, nc + 1):
@@ -1196,22 +1196,32 @@ def _write_strategy_subtotals(wt, row_start, cc_key, strategy_data, nc):
         c.fill      = F_BLK_HDR
         c.font      = FN_BOLD
         c.border    = BORD
-        c.alignment = Alignment(horizontal="left", vertical="center")
+        c.alignment = Alignment(horizontal="left" if ci != 1 else "left",
+                                vertical="center")
     wt.row_dimensions[r].height = 16
     r += 1
 
-    for kind, data in strategy_data.items():
-        label = KIND_LABELS.get(kind, kind)
-        comm  = data["commission"] or None
-        vals  = [f"  {label}", "", data["vol"], data["vol_equiv"],
-                 comm, "", "", "", "", "", ""]
-        for ci, val in enumerate(vals, 1):
-            _c(wt, r, ci, val,
-               fill=F_SUMMARY,
-               halign="right" if ci in (3, 4, 5) else "left",
-               bold=False)
-        wt.row_dimensions[r].height = 15
-        r += 1
+    # Single Grand Total row — sum all trade types
+    total_vol   = sum(d["vol"]      for d in strategy_data.values())
+    total_veq   = sum(d["vol_equiv"] for d in strategy_data.values())
+    # Full Total (KT) = vol_equiv_MT ÷ 1,000  (freight: 1 lot = 1,000 MT = 1 KT)
+    _, unit = CC_LOT.get(cc_key, (1, "lot"))
+    if unit == "MT":
+        full_total_kt = round(total_veq / 1_000, 4)
+    else:
+        full_total_kt = total_veq   # non-freight: leave as-is
+    # Commission = Full Total (KT) × 1,000 × 0.07
+    comm = round(full_total_kt * 1_000 * COMMISSION_PER_MT, 2) if full_total_kt else None
+
+    vals = ["  Grand Total", "", total_vol, full_total_kt,
+            comm, "", "", "", "", "", ""]
+    for ci, val in enumerate(vals, 1):
+        _c(wt, r, ci, val,
+           fill=F_SUMMARY,
+           halign="right" if ci in (3, 4, 5) else "left",
+           bold=True)
+    wt.row_dimensions[r].height = 16
+    r += 1
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1226,12 +1236,13 @@ _SUMMARY_CATEGORIES = [
     ("LPG",          FREIGHT_LPG_CC),
 ]
 
-# A=CC, B=Unit, C=Outright Vol, D=Outright Full Total, E=Spread Vol, F=Spread Full Total,
-# G=Total Vol, H=Total Full Total, I=Commission ($), J=# Trades
+# A=CC, B=Unit, C=Outright Vol (lots), D=Outright Full Total (KT),
+# E=Spread Vol (lots), F=Spread Full Total (KT),
+# G=Total Vol (lots), H=Total Full Total (KT), I=Commission ($), J=# Trades
 _SUMMARY_HDR_COLS = [
-    "CC", "Unit", "Outright Vol", "Outright Full Total",
-    "Spread Vol", "Spread Full Total",
-    "Total Vol", "Total Full Total", "Commission ($)", "# Trades",
+    "CC", "Unit", "Outright Vol (lots)", "Outright Full Total (KT)",
+    "Spread Vol (lots)", "Spread Full Total (KT)",
+    "Total Vol (lots)", "Total Full Total (KT)", "Commission ($)", "# Trades",
 ]
 _SUMMARY_HDR_WIDTHS = {
     "A": 14, "B": 8,  "C": 14, "D": 16,
@@ -1278,7 +1289,9 @@ def _build_day_summary(wb):
         strip0 = legs[0].get("strip", "")
         veq, unit = _vol_equiv(cc, qty, strip0, tt)
 
-        comm = veq * COMMISSION_PER_MT
+        # Commission: Full Total (KT) × 1,000 × 0.07 = vol_equiv_MT × 0.07
+        _, u = CC_LOT.get(cc, (1, "lot"))
+        comm = veq * COMMISSION_PER_MT if u == "MT" else 0.0
 
         d = cc_data[cc]
         d["trades"]     += 1
@@ -1341,16 +1354,20 @@ def _build_day_summary(wb):
         cat = _blank_cc()
         units_seen: set[str] = set()
 
+        def _to_kt(veq, unit):
+            """Convert vol equiv to KT for display (MT ÷ 1,000; others unchanged)."""
+            return round(veq / 1_000, 4) if unit == "MT" and veq else (veq or None)
+
         for cc in ccs_in_cat:
             d = cc_data[cc]
             tot_vol = d["out_vol"] + d["spr_vol"]
             tot_veq = d["out_veq"] + d["spr_veq"]
             unit    = d["unit"]
             units_seen.add(unit)
-            _sum_cell(r, [cc, unit,
-                          d["out_vol"] or None, d["out_veq"] or None,
-                          d["spr_vol"] or None, d["spr_veq"] or None,
-                          tot_vol, tot_veq,
+            _sum_cell(r, [cc, "KT" if unit == "MT" else unit,
+                          d["out_vol"] or None, _to_kt(d["out_veq"], unit),
+                          d["spr_vol"] or None, _to_kt(d["spr_veq"], unit),
+                          tot_vol, _to_kt(tot_veq, unit),
                           round(d["commission"], 2) or None, d["trades"]],
                       F_OUT, height=16)
             r += 1
@@ -1360,10 +1377,10 @@ def _build_day_summary(wb):
         cat_tot_vol = cat["out_vol"] + cat["spr_vol"]
         cat_tot_veq = cat["out_veq"] + cat["spr_veq"]
         cat_unit = next(iter(units_seen)) if len(units_seen) == 1 else "mixed"
-        _sum_cell(r, [f"  Total {cat_name}", cat_unit,
-                      cat["out_vol"] or None, cat["out_veq"] or None,
-                      cat["spr_vol"] or None, cat["spr_veq"] or None,
-                      cat_tot_vol, cat_tot_veq,
+        _sum_cell(r, [f"  Total {cat_name}", "KT" if cat_unit == "MT" else cat_unit,
+                      cat["out_vol"] or None, _to_kt(cat["out_veq"], cat_unit),
+                      cat["spr_vol"] or None, _to_kt(cat["spr_veq"], cat_unit),
+                      cat_tot_vol, _to_kt(cat_tot_veq, cat_unit),
                       round(cat["commission"], 2) or None, int(cat["trades"])],
                   F_SUMMARY, bold=True, height=18)
         r += 2
@@ -1371,12 +1388,14 @@ def _build_day_summary(wb):
         for k in ("out_vol", "out_veq", "spr_vol", "spr_veq", "commission", "trades"):
             grand[k] += cat[k]
 
-    # Grand Total — vol equiv omitted (mixed units across categories)
+    # Grand Total
     gt_vol = grand["out_vol"] + grand["spr_vol"]
-    _sum_cell(r, ["  GRAND TOTAL", "mixed",
-                  grand["out_vol"] or None, "—",
-                  grand["spr_vol"] or None, "—",
-                  gt_vol, "—",
+    gt_veq = grand["out_veq"] + grand["spr_veq"]
+    gt_kt  = round(gt_veq / 1_000, 4) if gt_veq else None
+    _sum_cell(r, ["  GRAND TOTAL", "KT",
+                  grand["out_vol"] or None, _to_kt(grand["out_veq"], "MT"),
+                  grand["spr_vol"] or None, _to_kt(grand["spr_veq"], "MT"),
+                  gt_vol, gt_kt,
                   round(grand["commission"], 2) or None, int(grand["trades"])],
               F_GRAND, bold=True, height=22, white_text=True)
 
