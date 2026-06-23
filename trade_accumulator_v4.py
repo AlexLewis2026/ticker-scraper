@@ -675,6 +675,7 @@ F_OUT       = PatternFill("solid", fgColor="FFFFFF")  # white       — outright
 F_SPREAD    = PatternFill("solid", fgColor="FFF2CC")  # amber       — spreads
 F_FLAG      = PatternFill("solid", fgColor="FCE4D6")  # salmon      — flagged
 F_CC_BAND   = PatternFill("solid", fgColor="1F3864")  # navy        — CC banner
+F_GRAND     = PatternFill("solid", fgColor="2E75B6")  # mid-blue    — Grand Total row
 F_BLK_HDR   = PatternFill("solid", fgColor="D6E4F0")  # steel blue  — block header
 F_TRADE_ALT = PatternFill("solid", fgColor="EBF3FB")  # pale blue   — alt trade rows
 F_SUMMARY   = PatternFill("solid", fgColor="E2EFDA")  # pale green  — VWAP summary
@@ -1259,13 +1260,13 @@ def _build_day_summary(wb):
         for k in ("out_vol", "out_veq", "spr_vol", "spr_veq", "trades"):
             grand[k] += cat[k]
 
-    # Grand Total — units are mixed, omit vol equiv totals
+    # Grand Total — vol equiv omitted (mixed units across categories)
     gt_vol = grand["out_vol"] + grand["spr_vol"]
-    _sum_cell(r, ["  GRAND TOTAL", "mixed",
+    _sum_cell(r, ["  GRAND TOTAL", "KT",
                   grand["out_vol"] or None, "—",
                   grand["spr_vol"] or None, "—",
                   gt_vol, "—", int(grand["trades"])],
-              F_CC_BAND, bold=True, height=22, white_text=True)
+              F_GRAND, bold=True, height=22, white_text=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
