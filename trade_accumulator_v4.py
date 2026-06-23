@@ -227,7 +227,7 @@ def _block_category(strip: str) -> int:
 
 
 # ── Contract lot sizes and display units ────────────────────────────────────────
-# (lot_size, display_unit)  — display_unit is what the Vol Equiv column shows
+# (lot_size, display_unit)  — display_unit is what the Full Total column shows
 CC_LOT: dict[str, tuple[int, str]] = {
     "AEB": (1_000, "bbl"),
     "AEN": (100,   "MT"),
@@ -861,9 +861,9 @@ CC_FLAT_RATE: dict[str, float] = {
     "WSN":  7.940,
 }
 
-TALLY_COLS   = ["CC × Strip / Spread", "Timestamp", "Qty", "Vol Equiv",
+TALLY_COLS   = ["CC × Strip / Spread", "Timestamp", "Qty", "Full Total",
                  "Price", "World Scale", "High", "Low",
-                 "Cumul. Vol", "Cumul. Vol Equiv", "VWAP (running)"]
+                 "Cumul. Vol", "Cumul. Full Total", "VWAP (running)"]
 TALLY_WIDTHS = {"A": 36, "B": 18, "C": 10, "D": 12,
                  "E": 14, "F": 12, "G": 12, "H": 12, "I": 14, "J": 16, "K": 16}
 TALLY_NUM_COLS = 11  # total column count
@@ -1188,7 +1188,7 @@ def _write_strategy_subtotals(wt, row_start, cc_key, strategy_data, nc):
         "CONDOR": "Condor", "INTERPRODUCT_SPREAD": "Inter-product Spread",
     }
     _HDR_VALS = {1: f"{cc_key}  — Strategy Summary", 3: "Vol (lots)",
-                 4: "Vol Equiv", 5: "Commission ($)"}
+                 4: "Full Total", 5: "Commission ($)"}
     r = row_start
     # Section header
     for ci in range(1, nc + 1):
@@ -1226,12 +1226,12 @@ _SUMMARY_CATEGORIES = [
     ("LPG",          FREIGHT_LPG_CC),
 ]
 
-# A=CC, B=Unit, C=Outright Vol, D=Outright Vol Equiv, E=Spread Vol, F=Spread Vol Equiv,
-# G=Total Vol, H=Total Vol Equiv, I=Commission ($), J=# Trades
+# A=CC, B=Unit, C=Outright Vol, D=Outright Full Total, E=Spread Vol, F=Spread Full Total,
+# G=Total Vol, H=Total Full Total, I=Commission ($), J=# Trades
 _SUMMARY_HDR_COLS = [
-    "CC", "Unit", "Outright Vol", "Outright Vol Eq",
-    "Spread Vol", "Spread Vol Eq",
-    "Total Vol", "Total Vol Eq", "Commission ($)", "# Trades",
+    "CC", "Unit", "Outright Vol", "Outright Full Total",
+    "Spread Vol", "Spread Full Total",
+    "Total Vol", "Total Full Total", "Commission ($)", "# Trades",
 ]
 _SUMMARY_HDR_WIDTHS = {
     "A": 14, "B": 8,  "C": 14, "D": 16,
