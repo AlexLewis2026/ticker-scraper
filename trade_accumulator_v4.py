@@ -256,19 +256,19 @@ CC_LOT: dict[str, tuple[int, str]] = {
     "SMV": (100,   "bbl"),
     "STB": (1_000, "bbl"),
     "UCB": (1_000, "MT"),
-    # ── Freight (1 lot = 1,000 MT = 1 KT; vol equiv displayed in KT) ─────
-    "JFF": (1, "KT"),
-    "TDC": (1, "KT"),
-    "TDA": (1, "KT"),
-    "TDL": (1, "KT"),
-    "WAT": (1, "KT"),
-    "WDF": (1, "KT"),
-    "WFA": (1, "KT"),
-    "WHK": (1, "KT"),
-    "WMJ": (1, "KT"),
-    "WNS": (1, "KT"),
-    "WNX": (1, "KT"),
-    "WSN": (1, "KT"),
+    # ── Freight (1 lot = 1,000 MT; vol equiv displayed in MT) ────────────
+    "JFF": (1_000, "MT"),
+    "TDC": (1_000, "MT"),
+    "TDA": (1_000, "MT"),
+    "TDL": (1_000, "MT"),
+    "WAT": (1_000, "MT"),
+    "WDF": (1_000, "MT"),
+    "WFA": (1_000, "MT"),
+    "WHK": (1_000, "MT"),
+    "WMJ": (1_000, "MT"),
+    "WNS": (1_000, "MT"),
+    "WNX": (1_000, "MT"),
+    "WSN": (1_000, "MT"),
 }
 
 # Contracts traded in MT but quoted/displayed in bbl: multiply MT vol by this factor
@@ -1156,8 +1156,8 @@ def _rebuild_tally(wb):
             r += 1
 
             # Accumulate for strategy subtotals
-            lot_size, unit = CC_LOT.get(cc_key, (1, "lot"))
-            comm = round(qty_val * lot_size * COMMISSION_PER_MT, 2)
+            # Commission uses vol_equiv (MT) so strip multiplier is included
+            comm = round(veq_val * COMMISSION_PER_MT, 2)
             cc_strategy_vol[cc_key][kind]["vol"]        += qty_val
             cc_strategy_vol[cc_key][kind]["vol_equiv"]  += veq_val
             cc_strategy_vol[cc_key][kind]["commission"] += comm
@@ -1278,8 +1278,7 @@ def _build_day_summary(wb):
         strip0 = legs[0].get("strip", "")
         veq, unit = _vol_equiv(cc, qty, strip0, tt)
 
-        lot_size, _ = CC_LOT.get(cc, (1, "lot"))
-        comm = qty * lot_size * COMMISSION_PER_MT
+        comm = veq * COMMISSION_PER_MT
 
         d = cc_data[cc]
         d["trades"]     += 1
@@ -1374,7 +1373,7 @@ def _build_day_summary(wb):
 
     # Grand Total — vol equiv omitted (mixed units across categories)
     gt_vol = grand["out_vol"] + grand["spr_vol"]
-    _sum_cell(r, ["  GRAND TOTAL", "KT",
+    _sum_cell(r, ["  GRAND TOTAL", "MT",
                   grand["out_vol"] or None, "—",
                   grand["spr_vol"] or None, "—",
                   gt_vol, "—",
