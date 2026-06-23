@@ -761,6 +761,24 @@ FREIGHT_CLEAN_CC = {"WMJ", "WSN", "WHK", "JFF", "WNX", "WNS"}
 FREIGHT_DIRTY_CC = {"TDC", "TDL", "WDF", "TDA"}
 FREIGHT_LPG_CC   = {"WAT", "WFA"}
 
+# Static hub-name fallback — used when a CC's trades don't carry a hub string
+CC_HUB_NAME: dict[str, str] = {
+    "JFF": "TC17",
+    "TDA": "TD20",
+    "TDC": "TD20",
+    "TDL": "TD3C",
+    "WAT": "LPG (BLPG)",
+    "WDF": "USGC-UK Continent (Dirty)",
+    "WFA": "LPG (BLPG3)",
+    "WHK": "TC14",
+    "WMJ": "TC5",
+    "WNS": "TC2",
+    "WNX": "TC5",
+    "WSN": "TC6",
+}
+
+COMMISSION_PER_MT = 0.07   # $/MT for both outrights and spreads
+
 # Trade Log columns
 # A  Timestamp | B  Trade Type | C  Notes/Flags | D  CC | E  Qty | F  Hub
 # G  Spread Price
@@ -1033,9 +1051,9 @@ def _rebuild_tally(wb):
     r       = 3
     prev_cc = None
 
-    # Accumulate per-CC strategy subtotals: {cc: {kind: {"vol": N, "vol_equiv": N}}}
+    # Accumulate per-CC strategy subtotals: {cc: {kind: {"vol": N, "vol_equiv": N, "commission": N}}}
     cc_strategy_vol: dict[str, dict[str, dict]] = defaultdict(
-        lambda: defaultdict(lambda: {"vol": 0, "vol_equiv": 0}))
+        lambda: defaultdict(lambda: {"vol": 0, "vol_equiv": 0, "commission": 0.0}))
 
     RIGHT = {"right"}  # convenience
 
@@ -1054,7 +1072,7 @@ def _rebuild_tally(wb):
                                           cc_strategy_vol[prev_cc], NC)
                 r += len(cc_strategy_vol[prev_cc]) + 2  # subtotals + blank spacer
 
-            hub_name = bucket_hub.get(cc_key, "")
+            hub_name = bucket_hub.get(cc_key, "") or CC_HUB_NAME.get(cc_key, "")
             is_freight = cc_key in _ALL_FREIGHT_CC
             banner = f"{cc_key}  —  {hub_name}" if (hub_name and is_freight) else cc_key
             _banner_row(r, banner, F_CC_BAND, FN_HDR, height=22)
@@ -1103,8 +1121,11 @@ def _rebuild_tally(wb):
             r += 1
 
             # Accumulate for strategy subtotals
-            cc_strategy_vol[cc_key][kind]["vol"]      += qty_val
-            cc_strategy_vol[cc_key][kind]["vol_equiv"] += veq_val
+            lot_size, unit = CC_LOT.get(cc_key, (1, "lot"))
+            comm = round(qty_val * lot_size * COMMISSION_PER_MT, 2)
+            cc_strategy_vol[cc_key][kind]["vol"]        += qty_val
+            cc_strategy_vol[cc_key][kind]["vol_equiv"]  += veq_val
+            cc_strategy_vol[cc_key][kind]["commission"] += comm
 
         # ── Summary / VWAP row for this block ─────────────────────────────
         trade_count  = len(recs)
@@ -1131,11 +1152,12 @@ def _write_strategy_subtotals(wt, row_start, cc_key, strategy_data, nc):
         "SPREAD": "Spread", "BUTTERFLY": "Butterfly",
         "CONDOR": "Condor", "INTERPRODUCT_SPREAD": "Inter-product Spread",
     }
+    _HDR_VALS = {1: f"{cc_key}  — Strategy Summary", 3: "Vol (lots)",
+                 4: "Vol Equiv", 5: "Commission ($)"}
     r = row_start
     # Section header
     for ci in range(1, nc + 1):
-        c = wt.cell(row=r, column=ci,
-                    value=(f"{cc_key}  — Strategy Summary" if ci == 1 else None))
+        c = wt.cell(row=r, column=ci, value=_HDR_VALS.get(ci))
         c.fill      = F_BLK_HDR
         c.font      = FN_BOLD
         c.border    = BORD
@@ -1145,12 +1167,13 @@ def _write_strategy_subtotals(wt, row_start, cc_key, strategy_data, nc):
 
     for kind, data in strategy_data.items():
         label = KIND_LABELS.get(kind, kind)
+        comm  = data["commission"] or None
         vals  = [f"  {label}", "", data["vol"], data["vol_equiv"],
-                 "", "", "", "", "", "", ""]
+                 comm, "", "", "", "", "", ""]
         for ci, val in enumerate(vals, 1):
             _c(wt, r, ci, val,
                fill=F_SUMMARY,
-               halign="right" if ci in (3, 4) else "left",
+               halign="right" if ci in (3, 4, 5) else "left",
                bold=False)
         wt.row_dimensions[r].height = 15
         r += 1
@@ -1169,15 +1192,15 @@ _SUMMARY_CATEGORIES = [
 ]
 
 # A=CC, B=Unit, C=Outright Vol, D=Outright Vol Equiv, E=Spread Vol, F=Spread Vol Equiv,
-# G=Total Vol, H=Total Vol Equiv, I=# Trades
+# G=Total Vol, H=Total Vol Equiv, I=Commission ($), J=# Trades
 _SUMMARY_HDR_COLS = [
     "CC", "Unit", "Outright Vol", "Outright Vol Eq",
     "Spread Vol", "Spread Vol Eq",
-    "Total Vol", "Total Vol Eq", "# Trades",
+    "Total Vol", "Total Vol Eq", "Commission ($)", "# Trades",
 ]
 _SUMMARY_HDR_WIDTHS = {
     "A": 14, "B": 8,  "C": 14, "D": 16,
-    "E": 12, "F": 14, "G": 12, "H": 14, "I": 10,
+    "E": 12, "F": 14, "G": 12, "H": 14, "I": 16, "J": 10,
 }
 
 _OUTRIGHT_TYPES = {"OUTRIGHT", "TAPS"}
@@ -1194,7 +1217,7 @@ def _build_day_summary(wb):
     def _blank_cc():
         return {"out_vol": 0.0, "out_veq": 0.0,
                 "spr_vol": 0.0, "spr_veq": 0.0,
-                "trades":  0,   "unit": ""}
+                "commission": 0.0, "trades": 0, "unit": ""}
 
     cc_data: dict[str, dict] = defaultdict(_blank_cc)
 
@@ -1220,9 +1243,13 @@ def _build_day_summary(wb):
         strip0 = legs[0].get("strip", "")
         veq, unit = _vol_equiv(cc, qty, strip0, tt)
 
+        lot_size, _ = CC_LOT.get(cc, (1, "lot"))
+        comm = qty * lot_size * COMMISSION_PER_MT
+
         d = cc_data[cc]
-        d["trades"] += 1
-        d["unit"]    = unit
+        d["trades"]     += 1
+        d["unit"]        = unit
+        d["commission"] += comm
         if tt in _OUTRIGHT_TYPES:
             d["out_vol"] += qty
             d["out_veq"] += veq
@@ -1289,10 +1316,11 @@ def _build_day_summary(wb):
             _sum_cell(r, [cc, unit,
                           d["out_vol"] or None, d["out_veq"] or None,
                           d["spr_vol"] or None, d["spr_veq"] or None,
-                          tot_vol, tot_veq, d["trades"]],
+                          tot_vol, tot_veq,
+                          round(d["commission"], 2) or None, d["trades"]],
                       F_OUT, height=16)
             r += 1
-            for k in ("out_vol", "out_veq", "spr_vol", "spr_veq", "trades"):
+            for k in ("out_vol", "out_veq", "spr_vol", "spr_veq", "commission", "trades"):
                 cat[k] += d[k]
 
         cat_tot_vol = cat["out_vol"] + cat["spr_vol"]
@@ -1301,11 +1329,12 @@ def _build_day_summary(wb):
         _sum_cell(r, [f"  Total {cat_name}", cat_unit,
                       cat["out_vol"] or None, cat["out_veq"] or None,
                       cat["spr_vol"] or None, cat["spr_veq"] or None,
-                      cat_tot_vol, cat_tot_veq, int(cat["trades"])],
+                      cat_tot_vol, cat_tot_veq,
+                      round(cat["commission"], 2) or None, int(cat["trades"])],
                   F_SUMMARY, bold=True, height=18)
         r += 2
 
-        for k in ("out_vol", "out_veq", "spr_vol", "spr_veq", "trades"):
+        for k in ("out_vol", "out_veq", "spr_vol", "spr_veq", "commission", "trades"):
             grand[k] += cat[k]
 
     # Grand Total — vol equiv omitted (mixed units across categories)
@@ -1313,7 +1342,8 @@ def _build_day_summary(wb):
     _sum_cell(r, ["  GRAND TOTAL", "KT",
                   grand["out_vol"] or None, "—",
                   grand["spr_vol"] or None, "—",
-                  gt_vol, "—", int(grand["trades"])],
+                  gt_vol, "—",
+                  round(grand["commission"], 2) or None, int(grand["trades"])],
               F_GRAND, bold=True, height=22, white_text=True)
 
 
