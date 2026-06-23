@@ -1008,10 +1008,8 @@ def _rebuild_tally(wb):
                 r += len(cc_strategy_vol[prev_cc]) + 2  # subtotals + blank spacer
 
             hub_name = bucket_hub.get(cc_key, "")
-            _, unit  = CC_LOT.get(cc_key, (1, "lot"))
-            if cc_key in CC_MT_TO_BBL:
-                unit = "bbl"
-            banner   = f"{cc_key}  —  {hub_name}" if hub_name else cc_key
+            is_freight = cc_key in _ALL_FREIGHT_CC
+            banner = f"{cc_key}  —  {hub_name}" if (hub_name and is_freight) else cc_key
             _banner_row(r, banner, F_CC_BAND, FN_HDR, height=22)
             r += 1
             prev_cc = cc_key
