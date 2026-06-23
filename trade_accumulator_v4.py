@@ -1198,10 +1198,11 @@ def _build_day_summary(wb):
     r  = 3
     nc = len(_SUMMARY_HDR_COLS)
 
-    def _sum_cell(row_num, vals, fill, bold=False, height=16):
+    def _sum_cell(row_num, vals, fill, bold=False, height=16, white_text=False):
         aligns = ["left"] + ["right"] * (nc - 1)
+        font = FN_HDR if white_text else None
         for ci, (val, ha) in enumerate(zip(vals, aligns), 1):
-            _c(ws2, row_num, ci, val, fill=fill, halign=ha, bold=bold)
+            _c(ws2, row_num, ci, val, fill=fill, halign=ha, bold=bold, font=font)
         ws2.row_dimensions[row_num].height = height
 
     def _banner(row_num, text, height=20):
@@ -1266,7 +1267,7 @@ def _build_day_summary(wb):
                   grand["out_vol"] or None, "—",
                   grand["spr_vol"] or None, "—",
                   gt_vol, "—", int(grand["trades"])],
-              F_CC_BAND, bold=True, height=22)
+              F_CC_BAND, bold=True, height=22, white_text=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
