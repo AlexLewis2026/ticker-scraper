@@ -799,6 +799,7 @@ LOG_WIDTHS = {
 CC_FLAT_RATE: dict[str, float] = {
     "JFF": 11.080,
     "TDA": 17.720,
+    "TDC": 17.720,
     "TDL": 20.210,
     "WDF": 21.010,
     "WHK": 22.540,
