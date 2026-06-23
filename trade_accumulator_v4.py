@@ -1011,7 +1011,7 @@ def _rebuild_tally(wb):
             _, unit  = CC_LOT.get(cc_key, (1, "lot"))
             if cc_key in CC_MT_TO_BBL:
                 unit = "bbl"
-            banner   = f"{cc_key}  —  {hub_name}  ({unit})" if hub_name else f"{cc_key}  ({unit})"
+            banner   = f"{cc_key}  —  {hub_name}" if hub_name else cc_key
             _banner_row(r, banner, F_CC_BAND, FN_HDR, height=22)
             r += 1
             prev_cc = cc_key
