@@ -195,6 +195,37 @@ def _strip_sort_key(strip: str) -> tuple:
     return (9, 99, 99)
 
 
+def _block_category(strip: str) -> int:
+    """
+    Return a sort priority for the strip type so blocks appear in the order:
+      0  Monthly outright   Jul26, Aug26
+      1  Monthly spread     Jul26/Aug26
+      2  Strip range        Aug26-Oct26
+      3  Quarter outright   Q3 26, Q4 26
+      4  Quarter spread     Q3 26/Q4 26
+      5  Cal outright       Cal 27
+      6  Cal spread         Cal 27/Cal 28
+      7  Bal Month / other
+    The caller appends is_spread so outright vs spread within the same period
+    type are split correctly.
+    """
+    s = strip.strip()
+    # Spread: contains "/"
+    is_spread = "/" in s
+    first = s.split("/")[0].strip()
+
+    if re.match(r"^[Cc]al", first):
+        return 6 if is_spread else 5
+    if re.match(r"^Q[1-4]", first):
+        return 4 if is_spread else 3
+    if re.match(r"^[A-Za-z]{3}\d{2}-[A-Za-z]{3}\d{2}$", first):
+        return 2                          # strip range (no spread variant expected)
+    if re.match(r"^[Bb]al", first):
+        return 7
+    # Monthly
+    return 1 if is_spread else 0
+
+
 # ── Contract lot sizes and display units ────────────────────────────────────────
 # (lot_size, display_unit)  — display_unit is what the Vol Equiv column shows
 CC_LOT: dict[str, tuple[int, str]] = {
@@ -950,12 +981,12 @@ def _rebuild_tally(wb):
     for k in buckets:
         buckets[k].sort(key=lambda x: x["ts"])
 
-    # ── Sort keys: CC → kind → strip label ────────────────────────────────
-    KIND_ORDER = {"OUTRIGHT": 0, "TAPS": 1, "SPREAD": 2, "BUTTERFLY": 3,
-                  "CONDOR": 4, "INTERPRODUCT_SPREAD": 5}
+    # ── Sort keys: CC → strip category → chronological strip ─────────────
+    # Order within each CC: monthly outrights → monthly spreads → strip ranges
+    # → quarter outrights → quarter spreads → cal outrights → cal spreads → other
     sorted_keys = sorted(
         buckets.keys(),
-        key=lambda k: (k[0], KIND_ORDER.get(k[2], 9), k[1])
+        key=lambda k: (k[0], _block_category(k[1]), _strip_sort_key(k[1].split("/")[0].strip()))
     )
 
     # ── Clear old tally rows (row 3+) ─────────────────────────────────────
