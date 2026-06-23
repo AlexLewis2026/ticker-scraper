@@ -225,6 +225,19 @@ CC_LOT: dict[str, tuple[int, str]] = {
     "SMV": (100,   "bbl"),
     "STB": (1_000, "bbl"),
     "UCB": (1_000, "MT"),
+    # ── Freight (all 1,000 MT standard lots) ──────────────────────────────
+    "JFF": (1_000, "MT"),
+    "TDC": (1_000, "MT"),
+    "TDA": (1_000, "MT"),
+    "TDL": (1_000, "MT"),
+    "WAT": (1_000, "MT"),
+    "WDF": (1_000, "MT"),
+    "WFA": (1_000, "MT"),
+    "WHK": (1_000, "MT"),
+    "WMJ": (1_000, "MT"),
+    "WNS": (1_000, "MT"),
+    "WNX": (1_000, "MT"),
+    "WSN": (1_000, "MT"),
 }
 
 # Contracts traded in MT but quoted/displayed in bbl: multiply MT vol by this factor
@@ -1103,7 +1116,6 @@ def _write_strategy_subtotals(wt, row_start, cc_key, strategy_data, nc):
 _ALL_FREIGHT_CC = FREIGHT_CLEAN_CC | FREIGHT_DIRTY_CC | FREIGHT_LPG_CC
 
 _SUMMARY_CATEGORIES = [
-    ("Light Ends",   None),           # None = everything not in freight
     ("Clean Tanker", FREIGHT_CLEAN_CC),
     ("Dirty Tanker", FREIGHT_DIRTY_CC),
     ("LPG",          FREIGHT_LPG_CC),
