@@ -81,7 +81,7 @@ def capture_window(win) -> bytes | None:
             hwnd = win._hWnd
             ctypes.windll.user32.ShowWindow(hwnd, 9)       # SW_RESTORE
             ctypes.windll.user32.SetForegroundWindow(hwnd)
-        time.sleep(0.4)   # allow window to fully paint
+        time.sleep(1.5)   # allow window to fully paint and come to foreground
 
         monitor = {
             "left":   win.left,

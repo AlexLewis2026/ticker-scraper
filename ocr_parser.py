@@ -131,12 +131,17 @@ HUB_CC_MAP: dict[str, str] = {
     "td20":                                                            "TDC",
     "td3c":                                                            "TDL",
     "usgc-uk continent (dirty)":                                       "WDF",
+    # Balmo variants (amalgamated into parent in tally)
+    "td20 (balmo)":                                                    "TDA",
 
     # ── Clean freight ─────────────────────────────────────────────────────────
+    "tc2":                                                             "WNS",
     "tc5":                                                             "WMJ",
     "tc6":                                                             "WSN",
     "tc14":                                                            "WHK",
     "tc17":                                                            "JFF",
+    # Balmo variants (amalgamated into parent in tally)
+    "tc5 (balmo)":                                                     "WNX",
 
     # ── LPG freight ───────────────────────────────────────────────────────────
     # WAT = LPG (BLPG) FFA Middle East Gulf to East 44,000Mts (Baltic) Future

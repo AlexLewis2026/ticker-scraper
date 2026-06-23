@@ -233,6 +233,12 @@ CC_MT_TO_BBL: dict[str, float] = {
     "NOB": 8.90,
 }
 
+# Balmo CCs amalgamated into parent CC in the tally
+CC_ALIAS: dict[str, str] = {
+    "TDA": "TDC",   # TD20 Balmo → TD20
+    "WNX": "WMJ",   # TC5 Balmo  → TC5
+}
+
 # ── Strip-range month counter ───────────────────────────────────────────────────
 _RANGE_RE = re.compile(r"^([A-Za-z]{3})(\d{2})-([A-Za-z]{3})(\d{2})$")
 
@@ -706,8 +712,8 @@ SH_IMPORT  = "Import Log"
 SH_SUMMARY = "Day Summary"
 
 # Freight CC categorisation for Day Summary
-FREIGHT_CLEAN_CC = {"WMJ", "WSN", "WHK", "JFF", "WNX"}
-FREIGHT_DIRTY_CC = {"TDC", "TDL", "WDF"}
+FREIGHT_CLEAN_CC = {"WMJ", "WSN", "WHK", "JFF", "WNX", "WNS"}
+FREIGHT_DIRTY_CC = {"TDC", "TDL", "WDF", "TDA"}
 FREIGHT_LPG_CC   = {"WAT", "WFA"}
 
 # Trade Log columns
@@ -897,6 +903,9 @@ def _rebuild_tally(wb):
 
         if tt == "CANCELLED" or not legs:
             continue
+
+        # Amalgamate balmo CCs into their parent (e.g. TDA → TDC, WNX → WMJ)
+        cc = CC_ALIAS.get(cc, cc)
 
         strip0 = legs[0].get("strip", "")
         veq, unit = _vol_equiv(cc, qty, strip0, tt)
@@ -1145,6 +1154,9 @@ def _build_day_summary(wb):
 
         if tt == "CANCELLED" or not legs:
             continue
+
+        # Amalgamate balmo CCs into their parent
+        cc = CC_ALIAS.get(cc, cc)
 
         strip0 = legs[0].get("strip", "")
         veq, unit = _vol_equiv(cc, qty, strip0, tt)
