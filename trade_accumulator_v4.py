@@ -794,11 +794,25 @@ LOG_WIDTHS = {
 # E  Cumul. Volume  (running)
 # F  VWAP           (running)
 
+# Worldscale flat rates by CC.  WS = Price × 100 / flat_rate.
+# Blank if flat rate not available for that route.
+CC_FLAT_RATE: dict[str, float] = {
+    "JFF": 11.080,
+    "TDA": 17.720,
+    "TDL": 20.210,
+    "WDF": 21.010,
+    "WHK": 22.540,
+    "WMJ": 22.540,
+    "WNS": 15.930,
+    "WSN":  7.940,
+}
+
 TALLY_COLS   = ["CC × Strip / Spread", "Timestamp", "Qty", "Vol Equiv",
-                 "Price", "High", "Low", "Cumul. Vol", "Cumul. Vol Equiv", "VWAP (running)"]
+                 "Price", "World Scale", "High", "Low",
+                 "Cumul. Vol", "Cumul. Vol Equiv", "VWAP (running)"]
 TALLY_WIDTHS = {"A": 36, "B": 18, "C": 10, "D": 12,
-                 "E": 14, "F": 12, "G": 12, "H": 14, "I": 16, "J": 16}
-TALLY_NUM_COLS = 10  # total column count
+                 "E": 14, "F": 12, "G": 12, "H": 12, "I": 14, "J": 16, "K": 16}
+TALLY_NUM_COLS = 11  # total column count
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1076,12 +1090,14 @@ def _rebuild_tally(wb):
             running_vwap = round(vwap_num / cumvol, 6) if cumvol else None
             row_fill = F_TRADE_ALT if i % 2 == 0 else trade_fill
 
-            # A=blank, B=ts, C=qty, D=vol_equiv, E=price, F=hi, G=lo,
-            # H=cumvol, I=cumveq, J=vwap
+            # A=blank, B=ts, C=qty, D=vol_equiv, E=price, F=ws, G=hi, H=lo,
+            # I=cumvol, J=cumveq, K=vwap
+            flat = CC_FLAT_RATE.get(cc_key)
+            ws_val = round(price_val * 100 / flat, 3) if (flat and price_val) else None
             vals   = [None, rec["ts"], qty_val, veq_val, rec["price"],
-                      None, None, cumvol, cumveq, running_vwap]
+                      ws_val, None, None, cumvol, cumveq, running_vwap]
             aligns = ["left","left","right","right","right",
-                      "right","right","right","right","right"]
+                      "right","right","right","right","right","right"]
             _tally_row(r, vals, aligns, row_fill, height=16)
             r += 1
 
@@ -1094,9 +1110,9 @@ def _rebuild_tally(wb):
         final_vwap   = round(vwap_num / cumvol, 6) if cumvol else None
         count_label  = f"► {trade_count} trade{'s' if trade_count != 1 else ''}  |  Cumul. Vol / VWAP"
         sum_vals     = [count_label, "", cumvol, cumveq, "",
-                        hi, lo, cumvol, cumveq, final_vwap]
+                        "", hi, lo, cumvol, cumveq, final_vwap]
         sum_aligns   = ["left","left","right","right","right",
-                        "right","right","right","right","right"]
+                        "right","right","right","right","right","right"]
         _tally_row(r, sum_vals, sum_aligns, F_SUMMARY, bold=True, height=18)
         r += 1
 
@@ -1129,7 +1145,7 @@ def _write_strategy_subtotals(wt, row_start, cc_key, strategy_data, nc):
     for kind, data in strategy_data.items():
         label = KIND_LABELS.get(kind, kind)
         vals  = [f"  {label}", "", data["vol"], data["vol_equiv"],
-                 "", "", "", "", "", ""]
+                 "", "", "", "", "", "", ""]
         for ci, val in enumerate(vals, 1):
             _c(wt, r, ci, val,
                fill=F_SUMMARY,
