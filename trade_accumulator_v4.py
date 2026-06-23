@@ -225,19 +225,19 @@ CC_LOT: dict[str, tuple[int, str]] = {
     "SMV": (100,   "bbl"),
     "STB": (1_000, "bbl"),
     "UCB": (1_000, "MT"),
-    # ── Freight (all 1,000 MT standard lots) ──────────────────────────────
-    "JFF": (1_000, "MT"),
-    "TDC": (1_000, "MT"),
-    "TDA": (1_000, "MT"),
-    "TDL": (1_000, "MT"),
-    "WAT": (1_000, "MT"),
-    "WDF": (1_000, "MT"),
-    "WFA": (1_000, "MT"),
-    "WHK": (1_000, "MT"),
-    "WMJ": (1_000, "MT"),
-    "WNS": (1_000, "MT"),
-    "WNX": (1_000, "MT"),
-    "WSN": (1_000, "MT"),
+    # ── Freight (1 lot = 1,000 MT = 1 KT; vol equiv displayed in KT) ─────
+    "JFF": (1, "KT"),
+    "TDC": (1, "KT"),
+    "TDA": (1, "KT"),
+    "TDL": (1, "KT"),
+    "WAT": (1, "KT"),
+    "WDF": (1, "KT"),
+    "WFA": (1, "KT"),
+    "WHK": (1, "KT"),
+    "WMJ": (1, "KT"),
+    "WNS": (1, "KT"),
+    "WNX": (1, "KT"),
+    "WSN": (1, "KT"),
 }
 
 # Contracts traded in MT but quoted/displayed in bbl: multiply MT vol by this factor
