@@ -651,34 +651,69 @@ def group_rows_into_trades(raw_rows: list[dict]) -> list[dict]:
                     })
 
                 # Same qty → SPREAD
+                # Guard: if every leg shares the same strip they are separate outrights
+                # (OCR may collapse two rows with the same Ex.Time but different Sub.Times)
                 elif len(set(qtys)) == 1:
-                    sp   = (diff_rows[0]["price"] if diff_rows
-                            else round(ls[0]["price"] - ls[1]["price"], 6))
-                    note = "" if diff_rows else "implied diff"
-                    trades.append({
-                        "timestamp":    ts,
-                        "trade_type":   "SPREAD",
-                        "notes":        note,
-                        "cc":           cc,
-                        "qty":          qtys[0],
-                        "hub":          ls[0]["hub"],
-                        "spread_price": sp,
-                        "legs": [{"strip": r["strip"], "price": r["price"]} for r in ls],
-                    })
+                    strips = [r["strip"] for r in ls]
+                    if len(set(strips)) == 1:
+                        # All legs identical strip — cannot be a spread; emit as outrights
+                        for lr in ls:
+                            t = {
+                                "timestamp":    ts,
+                                "trade_type":   "OUTRIGHT",
+                                "notes":        "",
+                                "cc":           cc,
+                                "qty":          lr["qty"],
+                                "hub":          lr.get("hub", ""),
+                                "spread_price": None,
+                                "legs": [{"strip": lr["strip"], "price": lr["price"]}],
+                            }
+                            t["trade_type"] = _classify_trade_type(t)
+                            trades.append(t)
+                    else:
+                        sp   = (diff_rows[0]["price"] if diff_rows
+                                else round(ls[0]["price"] - ls[1]["price"], 6))
+                        note = "" if diff_rows else "implied diff"
+                        trades.append({
+                            "timestamp":    ts,
+                            "trade_type":   "SPREAD",
+                            "notes":        note,
+                            "cc":           cc,
+                            "qty":          qtys[0],
+                            "hub":          ls[0]["hub"],
+                            "spread_price": sp,
+                            "legs": [{"strip": r["strip"], "price": r["price"]} for r in ls],
+                        })
 
                 # 2 legs, unequal qty → SPREAD with implied diff
+                # Guard: same-strip rows are separate outrights (different Sub.Times collapsed by OCR)
                 elif len(ls) == 2:
-                    sp = round(ls[0]["price"] - ls[1]["price"], 6)
-                    trades.append({
-                        "timestamp":    ts,
-                        "trade_type":   "SPREAD",
-                        "notes":        "implied diff (unequal qty)",
-                        "cc":           cc,
-                        "qty":          ls[0]["qty"],
-                        "hub":          ls[0]["hub"],
-                        "spread_price": sp,
-                        "legs": [{"strip": r["strip"], "price": r["price"]} for r in ls],
-                    })
+                    if ls[0]["strip"] == ls[1]["strip"]:
+                        for lr in ls:
+                            t = {
+                                "timestamp":    ts,
+                                "trade_type":   "OUTRIGHT",
+                                "notes":        "",
+                                "cc":           cc,
+                                "qty":          lr["qty"],
+                                "hub":          lr.get("hub", ""),
+                                "spread_price": None,
+                                "legs": [{"strip": lr["strip"], "price": lr["price"]}],
+                            }
+                            t["trade_type"] = _classify_trade_type(t)
+                            trades.append(t)
+                    else:
+                        sp = round(ls[0]["price"] - ls[1]["price"], 6)
+                        trades.append({
+                            "timestamp":    ts,
+                            "trade_type":   "SPREAD",
+                            "notes":        "implied diff (unequal qty)",
+                            "cc":           cc,
+                            "qty":          ls[0]["qty"],
+                            "hub":          ls[0]["hub"],
+                            "spread_price": sp,
+                            "legs": [{"strip": r["strip"], "price": r["price"]} for r in ls],
+                        })
 
                 # 3+ legs, unresolvable mixed qty → flag each
                 else:
