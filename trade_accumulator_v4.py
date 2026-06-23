@@ -256,19 +256,19 @@ CC_LOT: dict[str, tuple[int, str]] = {
     "SMV": (100,   "bbl"),
     "STB": (1_000, "bbl"),
     "UCB": (1_000, "MT"),
-    # ── Freight (1 lot = 1,000 MT; vol equiv displayed in MT) ────────────
-    "JFF": (1_000, "MT"),
-    "TDC": (1_000, "MT"),
-    "TDA": (1_000, "MT"),
-    "TDL": (1_000, "MT"),
-    "WAT": (1_000, "MT"),
-    "WDF": (1_000, "MT"),
-    "WFA": (1_000, "MT"),
-    "WHK": (1_000, "MT"),
-    "WMJ": (1_000, "MT"),
-    "WNS": (1_000, "MT"),
-    "WNX": (1_000, "MT"),
-    "WSN": (1_000, "MT"),
+    # ── Freight (1 lot = 1 unit for vol equiv purposes) ──────────────────
+    "JFF": (1, "lot"),
+    "TDC": (1, "lot"),
+    "TDA": (1, "lot"),
+    "TDL": (1, "lot"),
+    "WAT": (1, "lot"),
+    "WDF": (1, "lot"),
+    "WFA": (1, "lot"),
+    "WHK": (1, "lot"),
+    "WMJ": (1, "lot"),
+    "WNS": (1, "lot"),
+    "WNX": (1, "lot"),
+    "WSN": (1, "lot"),
 }
 
 # Contracts traded in MT but quoted/displayed in bbl: multiply MT vol by this factor
@@ -1373,7 +1373,7 @@ def _build_day_summary(wb):
 
     # Grand Total — vol equiv omitted (mixed units across categories)
     gt_vol = grand["out_vol"] + grand["spr_vol"]
-    _sum_cell(r, ["  GRAND TOTAL", "MT",
+    _sum_cell(r, ["  GRAND TOTAL", "mixed",
                   grand["out_vol"] or None, "—",
                   grand["spr_vol"] or None, "—",
                   gt_vol, "—",
